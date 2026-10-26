@@ -1,0 +1,25 @@
+; Portable PIL structure. Unknown text-keyed annotations are preserved.
+; Name/dictionary uniqueness, STRING-only dictionaries and @fields are semantic checks.
+pil-definition = { pil-layout, pil-members, * tstr => any }
+pil-layout = ((pil: 0, ? adaptive_integers: "none") //
+              (pil: 1, adaptive_integers: "16" / "32"))
+pil-members = (
+  definition: tstr .size (1..4294967295),
+  version: uint,
+  fields: [+ pil-field]
+)
+pil-field = {
+  name: tstr .size (1..4294967295),
+  type: pil-scalar / pil-array,
+  ? values: [* tstr],
+  * tstr => any
+}
+pil-scalar = "BOOL" / "I8" / "I16" / "I32" / "I64"
+           / "U8" / "U16" / "U32" / "U64" / "F32" / "F64"
+           / "UUID" / "TIMESTAMP_MS" / "TIMESTAMP_US" / "TIMESTAMP_NS"
+           / "REF16" / "STRING" / "BYTES" / "CBOR"
+pil-array = "ARRAY<BOOL>" / "ARRAY<I8>" / "ARRAY<I16>" / "ARRAY<I32>" / "ARRAY<I64>"
+          / "ARRAY<U8>" / "ARRAY<U16>" / "ARRAY<U32>" / "ARRAY<U64>"
+          / "ARRAY<F32>" / "ARRAY<F64>" / "ARRAY<UUID>"
+          / "ARRAY<TIMESTAMP_MS>" / "ARRAY<TIMESTAMP_US>" / "ARRAY<TIMESTAMP_NS>"
+          / "ARRAY<REF16>" / "ARRAY<STRING>" / "ARRAY<BYTES>" / "ARRAY<CBOR>"

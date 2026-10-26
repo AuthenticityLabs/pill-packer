@@ -1,0 +1,34 @@
+[package]
+name = "pill-packer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Portable PIL encoding, decoding, and PAC reading"
+repository = "https://github.com/AuthenticityLabs/pill-packer"
+homepage = "https://trietrunk.com/PIL"
+publish = false
+
+[features]
+gzip = ["dep:flate2"]
+json = ["dep:serde_json"]
+
+[dependencies]
+flate2 = { version = "1.1.10", optional = true, default-features = false, features = ["rust_backend"] }
+ciborium = "0.2.2"
+ciborium-ll = "0.2.2"
+serde_json = { version = "1.0", optional = true }
+
+[lib]
+name = "pil_codec"
+
+[dev-dependencies]
+cddl = { version = "=0.10.7", default-features = false, features = ["std", "cbor", "json", "additional-controls", "ast-span"] }
+
+[[bench]]
+name = "codecs"
+harness = false
+
+[[bench]]
+name = "shared_refs"
+harness = false

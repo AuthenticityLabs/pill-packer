@@ -1,0 +1,38 @@
+{
+  "name": "pill-packer",
+  "version": "0.1.0",
+  "description": "PIL and PAC codecs backed by Rust WebAssembly",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    },
+    "./codec.wasm": "./codec.wasm"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "codec.wasm",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node ../scripts/build-wasm.mjs",
+    "test": "node --test test.mjs",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AuthenticityLabs/pill-packer.git",
+    "directory": "npm"
+  },
+  "homepage": "https://trietrunk.com/PIL",
+  "bugs": {
+    "url": "https://github.com/AuthenticityLabs/pill-packer/issues"
+  }
+}

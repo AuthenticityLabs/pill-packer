@@ -1,0 +1,21 @@
+[package]
+name = "pill-packer-wasm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "WebAssembly bindings for the Pill Packer codec"
+repository = "https://github.com/AuthenticityLabs/pill-packer"
+homepage = "https://trietrunk.com/PIL"
+publish = false
+[lib]
+crate-type = ["cdylib"]
+[dependencies]
+pil-codec = { package = "pill-packer", path = "..", features = ["gzip", "json"] }
+sha2 = "0.10"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true
