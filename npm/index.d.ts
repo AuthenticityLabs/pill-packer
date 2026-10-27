@@ -5,6 +5,9 @@ export class Codec {
   definitionFromJSON(text: string | Uint8Array): Uint8Array;
   scan(id: number, offset: number, length: number): number;
   pac(id: number, offset: number, length: number, count: number, additionalExtension?: number): Uint32Array;
+  scanStructural(id:number,offset:number,length:number):number;
+  pacStructural(id:number,offset:number,length:number,count:number,additionalExtension?:number):Uint32Array;
+  verifyCRC32C(bytes:Uint8Array,expected:number):void;
   inflate(bytes: Uint8Array, length: number): Uint8Array;
   release(id: number): void;
 }

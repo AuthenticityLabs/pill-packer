@@ -9,19 +9,45 @@
       "types": "./index.d.ts",
       "import": "./index.js"
     },
-    "./codec.wasm": "./codec.wasm"
+    "./codec.wasm": "./codec.wasm",
+    "./cbor": {
+      "types": "./portable/cbor.d.ts",
+      "import": "./portable/cbor.js"
+    },
+    "./pac": {
+      "types": "./portable/pac.d.ts",
+      "import": "./portable/pac.js"
+    },
+    "./layout": {
+      "types": "./portable/layout.d.ts",
+      "import": "./portable/layout.js"
+    },
+    "./compression": {
+      "types": "./portable/compression.d.ts",
+      "import": "./portable/compression.js"
+    },
+    "./gzip": {
+      "types": "./portable/gzip.d.ts",
+      "import": "./portable/gzip.js"
+    },
+    "./columns": {
+      "types": "./portable/columns.d.ts",
+      "import": "./portable/columns.js"
+    }
   },
   "files": [
     "index.js",
     "index.d.ts",
     "codec.wasm",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "portable"
   ],
   "scripts": {
-    "build": "node ../scripts/build-wasm.mjs",
-    "test": "node --test test.mjs",
-    "prepack": "npm run build"
+    "build": "npm run build:portable && node ../scripts/build-wasm.mjs",
+    "test": "node --test test.mjs portable.test.mjs",
+    "prepack": "npm run build",
+    "build:portable": "tsc -p tsconfig.json"
   },
   "engines": {
     "node": ">=22"
@@ -34,5 +60,8 @@
   "homepage": "https://trietrunk.com/PIL",
   "bugs": {
     "url": "https://github.com/AuthenticityLabs/pill-packer/issues"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
   }
 }

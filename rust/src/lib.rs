@@ -40,3 +40,5 @@ pub use adaptive::AdaptiveIntegers;
 
 #[cfg(feature = "gzip")]
 pub mod compression;
+
+pub mod checksum;

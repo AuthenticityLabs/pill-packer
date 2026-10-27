@@ -18,6 +18,24 @@ impl FrameIndex {
         input: &[u8],
         maximum: usize,
     ) -> Result<usize, Error> {
+        self.scan_mode_for_pac(definition, input, maximum, true)
+    }
+    /// Locate fields without interpreting their values. Bounds are always checked.
+    pub fn scan_structural(
+        &mut self,
+        definition: &Definition,
+        input: &[u8],
+        maximum: usize,
+    ) -> Result<usize, Error> {
+        self.scan_mode_for_pac(definition, input, maximum, false)
+    }
+    pub(crate) fn scan_mode_for_pac(
+        &mut self,
+        definition: &Definition,
+        input: &[u8],
+        maximum: usize,
+        validate: bool,
+    ) -> Result<usize, Error> {
         let count = definition.fields().len();
         let mut cursor = 0;
         let mask = uint::take(input, &mut cursor, count.div_ceil(4))?;
@@ -34,7 +52,7 @@ impl FrameIndex {
             self.spans.push(match state(i) {
                 0 => [ABSENT, ABSENT],
                 1 => {
-                    if field.name == "@fields" {
+                    if validate && field.name == "@fields" {
                         return Err(Error::Invalid("@fields cannot be NULL"));
                     }
                     [NULL, NULL]
@@ -50,13 +68,13 @@ impl FrameIndex {
                     let width = definition.wire_width(i, width, plane, &mut width_bit)?;
                     let start = cursor;
                     let bytes = uint::take(input, &mut cursor, width)?;
-                    if field.reference_width().is_some() {
+                    if validate && field.reference_width().is_some() {
                         let mut n = [0; 8];
                         n[..width].copy_from_slice(bytes);
                         if u64::from_le_bytes(n) >= field.values.len() as u64 {
                             return Err(Error::Invalid("mapped reference is outside dictionary"));
                         }
-                    } else if let Type::Scalar(_) = field.kind {
+                    } else if validate && matches!(field.kind, Type::Scalar(_)) {
                         definition.integer_value(i, bytes)?;
                     }
                     [
@@ -102,10 +120,13 @@ impl FrameIndex {
             let span = &mut self.spans[i];
             span[0] += prefix as u32;
             span[1] += prefix as u32;
+            if !validate {
+                continue;
+            }
             let bytes = &input[span[0] as usize..span[1] as usize];
             match field.kind {
                 Type::Scalar(Scalar::Cbor) => {
-                    if field.name == "@fields" {
+                    if validate && field.name == "@fields" {
                         crate::cbor::dynamic_fields(bytes, definition)?;
                     } else {
                         CborRef::parse(bytes)?;

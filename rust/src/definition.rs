@@ -40,6 +40,9 @@ impl Field {
     }
 }
 
+//TODO: Explore compiling CDDL plus PIL layout conventions/annotations into a
+// definition-specific WASM encoder/decoder. Preserve wire format and validation;
+// benchmark against the generalized codec to establish any performance benefit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
     identity: String,

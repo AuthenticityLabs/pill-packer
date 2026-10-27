@@ -5,8 +5,15 @@ node_modules/
 npm/codec.wasm
 npm/LICENSE
 *.md
+*.MD
+*.markdown
 !/README.md
 *.log
 *.tar.gz
 .env
 .env.*
+
+npm/portable/
+
+.agents/
+.codex/

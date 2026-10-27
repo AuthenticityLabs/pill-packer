@@ -69,3 +69,46 @@ fn extended_offsets_empty_arrays_and_cbormaps_are_validated() {
     *corrupt.last_mut().unwrap() = 0xff;
     assert!(index.scan(&d, &corrupt, 1 << 20).is_err());
 }
+
+#[test]
+fn structural_scan_skips_values_but_preserves_safe_boundaries() {
+    let d = Definition::new(
+        "structural",
+        0,
+        vec![
+            Field::mapped("code", ["one"]),
+            Field::new("text", Scalar::String),
+            Field::new("object", Scalar::Cbor),
+        ],
+    )
+    .unwrap();
+    let good = encode(
+        &d,
+        &[
+            Value::Mapped(0),
+            Value::String("text"),
+            Value::Cbor(&[0xf6]),
+        ],
+    )
+    .unwrap();
+    let mut full = FrameIndex::default();
+    full.scan(&d, &good, 1024).unwrap();
+    let spans = full.spans().to_vec();
+    let mut fast = FrameIndex::default();
+    assert_eq!(fast.scan_structural(&d, &good, 1024).unwrap(), good.len());
+    assert_eq!(fast.spans(), spans);
+    for end in 0..good.len() {
+        assert!(fast.scan_structural(&d, &good[..end], 1024).is_err());
+    }
+    for (field, value) in [(0, 4), (1, 255), (2, 255)] {
+        let mut invalid = good.clone();
+        invalid[spans[field][0] as usize] = value;
+        assert!(full.scan(&d, &invalid, 1024).is_err());
+        assert_eq!(
+            fast.scan_structural(&d, &invalid, 1024).unwrap(),
+            good.len()
+        );
+        assert_eq!(fast.spans(), spans);
+    }
+    assert!(fast.scan_structural(&d, &good, good.len() - 1).is_err());
+}

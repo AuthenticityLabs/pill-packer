@@ -1,0 +1,9 @@
+purchase = {
+  id: uint,
+  customer: customer,
+  items: [* item],
+  ? note: tstr / null
+}
+customer = { id: uint, name: tstr, address: address }
+address = { city: tstr, postal: tstr }
+item = { sku: tstr, quantity: 0..65535, unit_price: 0..4294967295 }

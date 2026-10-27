@@ -64,6 +64,13 @@ pub extern "C" fn release(handle: usize) {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn scan(handle: usize, start: usize, length: usize) -> u32 {
+    scan_mode(handle, start, length, false)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn scan_structural(handle: usize, start: usize, length: usize) -> u32 {
+    scan_mode(handle, start, length, true)
+}
+fn scan_mode(handle: usize, start: usize, length: usize, structural: bool) -> u32 {
     CODEC.with_borrow_mut(|c| {
         let Codec {
             input,
@@ -81,7 +88,13 @@ pub extern "C" fn scan(handle: usize, start: usize, length: usize) -> u32 {
                     .and_then(|end| input.get(start..end)),
             )
             .ok_or(Error::Invalid("invalid WASM handle or range"))
-            .and_then(|(d, b)| index.scan(d.0.definition(), b, MAX));
+            .and_then(|(d, b)| {
+                if structural {
+                    index.scan_structural(d.0.definition(), b, MAX)
+                } else {
+                    index.scan(d.0.definition(), b, MAX)
+                }
+            });
         match result {
             Ok(n) => n as u32,
             Err(Error::Incomplete) => 0,
@@ -103,6 +116,24 @@ pub extern "C" fn scan_pac(
     start: usize,
     length: usize,
     additional_extension: u32,
+) -> u32 {
+    scan_pac_mode(handle, start, length, additional_extension, false)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn scan_pac_structural(
+    handle: usize,
+    start: usize,
+    length: usize,
+    additional_extension: u32,
+) -> u32 {
+    scan_pac_mode(handle, start, length, additional_extension, true)
+}
+fn scan_pac_mode(
+    handle: usize,
+    start: usize,
+    length: usize,
+    additional_extension: u32,
+    structural: bool,
 ) -> u32 {
     CODEC.with_borrow_mut(|c| {
         let Codec {
@@ -127,13 +158,23 @@ pub extern "C" fn scan_pac(
             if extra {
                 supported.push(additional_extension);
             }
-            let result = pac.scan(
-                d.0.definition(),
-                b,
-                &digest,
-                supported,
-                u32::MAX as usize - 1,
-            );
+            let result = if structural {
+                pac.scan_structural(
+                    d.0.definition(),
+                    b,
+                    &digest,
+                    supported,
+                    u32::MAX as usize - 1,
+                )
+            } else {
+                pac.scan(
+                    d.0.definition(),
+                    b,
+                    &digest,
+                    supported,
+                    u32::MAX as usize - 1,
+                )
+            };
             if extra {
                 supported.pop();
             }
@@ -221,4 +262,21 @@ pub extern "C" fn document_ptr() -> *const u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn pac_count() -> u32 {
     CODEC.with_borrow(|c| c.pac.members().len() as u32)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn verify_crc32c(start: usize, length: usize, expected: u32) -> u32 {
+    CODEC.with_borrow_mut(|c| {
+        let valid = start
+            .checked_add(length)
+            .and_then(|end| c.input.get(start..end))
+            .map(|b| pil_codec::checksum::crc32c(b) == expected)
+            .unwrap_or(false);
+        if valid {
+            1
+        } else {
+            c.error = "PAC checksum mismatch".into();
+            u32::MAX
+        }
+    })
 }

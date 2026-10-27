@@ -28,9 +28,16 @@ export class Codec {
     return new Uint8Array(this.api.memory.buffer, this.api.document_ptr(), n).slice();
   }
   scan(id, offset, length) { return this.check(this.api.scan(id, offset, length)); }
-  pac(id, offset, length, count, additionalExtension = 0) {
+  scanStructural(id, offset, length) { return this.check(this.api.scan_structural(id, offset, length)); }
+  verifyCRC32C(bytes, expected) {
+    if (!Number.isInteger(expected) || expected < 0 || expected > 0xffffffff) throw Error('Invalid CRC32C');
+    this.upload(bytes); this.check(this.api.verify_crc32c(0, bytes.length, expected));
+  }
+  pacStructural(id, offset, length, count, additionalExtension = 0) { return this._pac(id,offset,length,count,additionalExtension,true); }
+  pac(id, offset, length, count, additionalExtension = 0) { return this._pac(id,offset,length,count,additionalExtension,false); }
+  _pac(id, offset, length, count, additionalExtension, structural) {
     if (!Number.isInteger(additionalExtension) || additionalExtension < 0 || additionalExtension > 0xffffffff) throw new RangeError("Invalid PAC extension");
-    const n = this.check(this.api.scan_pac(id, offset, length, additionalExtension));
+    const n = this.check((structural ? this.api.scan_pac_structural : this.api.scan_pac)(id, offset, length, additionalExtension));
     if (n !== length) throw Error('Truncated PAC');
     // Verify count before exposing a view into linear memory.
     if (!Number.isInteger(count) || count < 0 || count !== this.api.pac_count()) throw Error('PAC count mismatch');

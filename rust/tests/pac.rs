@@ -50,3 +50,33 @@ fn go_prefix_fixture_borrowed_roundtrip_and_malformed() {
             .is_err()
     );
 }
+
+#[test]
+fn structural_pac_retains_full_bounds_and_binding_checks() {
+    let raw = include_bytes!("fixtures/pac/packed.pac");
+    let d = Definition::from_cbor(include_bytes!("fixtures/pac/definition.cbor")).unwrap();
+    let digest: [u8; 32] = raw[32..64].try_into().unwrap();
+    let mut full = PacIndex::default();
+    full.scan(&d, raw, &digest, &[SOURCE_EXTENSION], 64 << 20)
+        .unwrap();
+    let mut fast = PacIndex::default();
+    assert_eq!(
+        fast.scan_structural(&d, raw, &digest, &[SOURCE_EXTENSION], 64 << 20)
+            .unwrap(),
+        raw.len()
+    );
+    assert_eq!(fast.members(), full.members());
+    assert_eq!(fast.common(), full.common());
+    for end in 0..raw.len() {
+        assert!(
+            fast.scan_structural(&d, &raw[..end], &digest, &[SOURCE_EXTENSION], 64 << 20)
+                .is_err()
+        );
+    }
+    let mut bad = raw.to_vec();
+    bad[32] ^= 1;
+    assert!(
+        fast.scan_structural(&d, &bad, &digest, &[SOURCE_EXTENSION], 64 << 20)
+            .is_err()
+    );
+}

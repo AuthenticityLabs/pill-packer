@@ -29,6 +29,35 @@ impl PacIndex {
         supported: &[u32],
         maximum: usize,
     ) -> Result<usize, Error> {
+        self.scan_mode(definition, input, expected_digest, supported, maximum, true)
+    }
+    /// Frame-only indexing for validated producers; field values stay opaque.
+    pub fn scan_structural(
+        &mut self,
+        definition: &Definition,
+        input: &[u8],
+        expected_digest: &[u8; 32],
+        supported: &[u32],
+        maximum: usize,
+    ) -> Result<usize, Error> {
+        self.scan_mode(
+            definition,
+            input,
+            expected_digest,
+            supported,
+            maximum,
+            false,
+        )
+    }
+    fn scan_mode(
+        &mut self,
+        definition: &Definition,
+        input: &[u8],
+        expected_digest: &[u8; 32],
+        supported: &[u32],
+        maximum: usize,
+        validate: bool,
+    ) -> Result<usize, Error> {
         self.members.clear();
         self.common = [0, 0];
         if input.len() < HEADER_SIZE {
@@ -93,7 +122,12 @@ impl PacIndex {
             return Err(Error::Invalid("PAC common bounds"));
         }
         self.common = [at as u32, header as u32];
-        if length > 0 && self.prefix.scan(definition, &input[at..header], maximum)? != length {
+        if length > 0
+            && self
+                .prefix
+                .scan_mode_for_pac(definition, &input[at..header], maximum, validate)?
+                != length
+        {
             return Err(Error::Invalid("PAC common frame"));
         }
         let mask = definition.fields().len().div_ceil(4);
@@ -102,8 +136,10 @@ impl PacIndex {
         }
         at = header;
         for _ in 0..count {
-            let n = self.member.scan(definition, &input[at..size], maximum)?;
-            if length > 0 {
+            let n =
+                self.member
+                    .scan_mode_for_pac(definition, &input[at..size], maximum, validate)?;
+            if validate && length > 0 {
                 for (c, m) in self.prefix.spans().iter().zip(self.member.spans()) {
                     if c[0] != ABSENT && m[0] != ABSENT {
                         return Err(Error::Invalid("PAC common override"));
