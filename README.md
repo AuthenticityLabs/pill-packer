@@ -4,7 +4,7 @@ Portable codecs for **PIL (Positional Interchange Layout)** and **PAC (Packed Ar
 Encode typed values by field position, distinguish absent fields from nulls,
 and read packed records without expanding every field into an object.
 
-[Format & Specification](https://github.com/AuthenticityLabs/pill-packer/blob/main/README.md)
+[Format & Specification](https://trietrunk.com/PIL)
 
 ## Pack API
 
