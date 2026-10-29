@@ -31,7 +31,7 @@ func (l *Layout) RestoreDirect(dst, raw []byte, fields []DirectField) ([]byte, e
 	dst = append(dst[:0], raw[:mask]...)
 	for _, f := range fields {
 		if State(raw[f.Index/4]>>uint(6-2*(f.Index%4))&3) != Absent {
-			return nil, fmt.Errorf("population shadows restored field")
+			return nil, fmt.Errorf("restored field shadows an existing value")
 		}
 		dst[f.Index/4] |= byte(Direct) << uint(6-2*(f.Index%4))
 	}

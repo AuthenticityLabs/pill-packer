@@ -11,10 +11,10 @@ import (
 
 // PositionalCBOR decodes a definite-length CBOR map with numeric field IDs
 // directly into definition-bound scalar slots. It is an opt-in codec prototype,
-// not a change to population storage. CBOR arrays, nested objects, tags, and
+// not a change to PIL record storage. CBOR arrays, nested objects, tags, and
 // indefinite-length items are intentionally outside this scalar profile.
 // Encoding details: https://www.rfc-editor.org/rfc/rfc8949.html#section-3.1
-// Descriptors are compiled once, never inferred from a particular event.
+// Descriptors are compiled once, never inferred from a particular record.
 // A reader may be shared; each concurrent caller must own its CBORFrame.
 type PositionalCBOR struct{ fields []cborField }
 type cborField struct {
@@ -51,7 +51,7 @@ func CompilePositionalCBOR(l *Layout) (*PositionalCBOR, error) {
 	for i, f := range l.Definition.Fields {
 		d := cborField{Width: l.Widths[i]}
 		switch f.Type {
-		case "U8", "U16", "U32", "U64", "REF16":
+		case "U8", "U16", "U24", "U32", "U64", "REF16":
 			d.kind = cborUnsigned
 		case "I8", "I16", "I32", "I64", "TIMESTAMP_MS", "TIMESTAMP_US", "TIMESTAMP_NS":
 			d.kind = cborSigned

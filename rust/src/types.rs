@@ -10,6 +10,8 @@ pub enum Scalar {
     I64,
     U8,
     U16,
+    /// Fixed-width unsigned integer in three little-endian bytes.
+    U24,
     /// Opaque shared-value reference. The binding identifies its target collection.
     Ref16,
     U32,
@@ -21,15 +23,36 @@ pub enum Scalar {
     TimestampUs,
     TimestampNs,
     String,
+    /// UTF-8 slot with a length prefix and zero-padded byte capacity.
+    FixedString(u32),
     Bytes,
-    Cbor,
+    Object,
 }
 
 impl Scalar {
+    pub fn string_length_width(capacity: u32) -> usize {
+        if capacity <= u8::MAX as u32 {
+            1
+        } else if capacity <= u16::MAX as u32 {
+            2
+        } else {
+            4
+        }
+    }
+
+    pub fn accepts(self, value: crate::Value<'_>) -> bool {
+        value.scalar() == Some(self)
+            || matches!(
+                (self, value),
+                (Self::FixedString(_), crate::Value::String(_))
+            )
+    }
+
     pub fn width(self) -> Option<usize> {
         match self {
             Self::Bool | Self::I8 | Self::U8 => Some(1),
             Self::I16 | Self::U16 | Self::Ref16 => Some(2),
+            Self::U24 => Some(3),
             Self::I32 | Self::U32 | Self::F32 => Some(4),
             Self::I64
             | Self::U64
@@ -38,13 +61,19 @@ impl Scalar {
             | Self::TimestampUs
             | Self::TimestampNs => Some(8),
             Self::Uuid => Some(16),
-            Self::String | Self::Bytes | Self::Cbor => None,
+            Self::FixedString(capacity) => {
+                Some(capacity as usize + Self::string_length_width(capacity))
+            }
+            Self::String | Self::Bytes | Self::Object => None,
         }
     }
 }
 
 impl fmt::Display for Scalar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::FixedString(capacity) = self {
+            return write!(f, "STRING({capacity})");
+        }
         f.write_str(match self {
             Self::Bool => "BOOL",
             Self::I8 => "I8",
@@ -53,6 +82,7 @@ impl fmt::Display for Scalar {
             Self::I64 => "I64",
             Self::U8 => "U8",
             Self::U16 => "U16",
+            Self::U24 => "U24",
             Self::Ref16 => "REF16",
             Self::U32 => "U32",
             Self::U64 => "U64",
@@ -63,8 +93,9 @@ impl fmt::Display for Scalar {
             Self::TimestampUs => "TIMESTAMP_US",
             Self::TimestampNs => "TIMESTAMP_NS",
             Self::String => "STRING",
+            Self::FixedString(_) => unreachable!(),
             Self::Bytes => "BYTES",
-            Self::Cbor => "CBOR",
+            Self::Object => "OBJECT",
         })
     }
 }
@@ -72,6 +103,20 @@ impl fmt::Display for Scalar {
 impl FromStr for Scalar {
     type Err = Error;
     fn from_str(text: &str) -> Result<Self, Error> {
+        if let Some(capacity) = text
+            .strip_prefix("STRING(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let capacity: u32 = capacity
+                .parse()
+                .map_err(|_| Error::Definition("invalid STRING byte capacity".into()))?;
+            if capacity == 0 {
+                return Err(Error::Definition(
+                    "use STRING for variable-capacity text".into(),
+                ));
+            }
+            return Ok(Self::FixedString(capacity));
+        }
         Ok(match text {
             "BOOL" => Self::Bool,
             "I8" => Self::I8,
@@ -80,6 +125,7 @@ impl FromStr for Scalar {
             "I64" => Self::I64,
             "U8" => Self::U8,
             "U16" => Self::U16,
+            "U24" => Self::U24,
             "REF16" => Self::Ref16,
             "U32" => Self::U32,
             "U64" => Self::U64,
@@ -91,7 +137,7 @@ impl FromStr for Scalar {
             "TIMESTAMP_NS" => Self::TimestampNs,
             "STRING" => Self::String,
             "BYTES" => Self::Bytes,
-            "CBOR" => Self::Cbor,
+            "OBJECT" => Self::Object,
             _ => return Err(Error::Definition(format!("unsupported scalar type {text}"))),
         })
     }

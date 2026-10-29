@@ -1,4 +1,4 @@
-//! Bounded, single-member gzip decoding for the negotiated event envelope.
+//! Bounded, single-member gzip decoding for compressed payloads.
 //! Does not change PIL primitive/frame semantics. Output capacity is reused.
 use std::io::{self, Read};
 const MAX: usize = u32::MAX as usize - 1;
@@ -6,7 +6,7 @@ pub fn inflate(input: &[u8], length: usize, output: &mut Vec<u8>) -> io::Result<
     if length == 0 || length > MAX || input.len() > MAX {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "invalid gzip event length",
+            "invalid gzip payload length",
         ));
     }
     let mut decoder = flate2::bufread::GzDecoder::new(input);
@@ -19,7 +19,7 @@ pub fn inflate(input: &[u8], length: usize, output: &mut Vec<u8>) -> io::Result<
     if decoder.read(&mut tail)? != 0 || !decoder.into_inner().is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "gzip event trailing bytes or length mismatch",
+            "gzip payload trailing bytes or length mismatch",
         ));
     }
     Ok(())
@@ -47,4 +47,16 @@ mod tests {
         assert!(inflate(&two, 17, &mut out).is_err());
         assert!(inflate(&raw, MAX + 1, &mut out).is_err());
     }
+}
+
+pub fn deflate(input: &[u8], level: u32, output: &mut Vec<u8>) -> io::Result<()> {
+    use std::io::Write;
+    if level > 9 {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "gzip level"));
+    }
+    output.clear();
+    let mut encoder = flate2::write::GzEncoder::new(output, flate2::Compression::new(level));
+    encoder.write_all(input)?;
+    encoder.finish()?;
+    Ok(())
 }

@@ -36,9 +36,9 @@ pub extern "C" fn input(length: usize) -> *mut u8 {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn definition() -> u32 {
-    CODEC.with_borrow_mut(|c| match DefinitionDocument::from_cbor(&c.input) {
+    CODEC.with_borrow_mut(|c| match DefinitionDocument::from_pil(&c.input) {
         Ok(d) => {
-            let digest: [u8; 32] = Sha256::digest(d.as_cbor()).into();
+            let digest: [u8; 32] = Sha256::digest(d.as_pil()).into();
             let d = (d, digest);
             if let Some(i) = c.definitions.iter().position(Option::is_none) {
                 c.definitions[i] = Some(d);
@@ -92,7 +92,7 @@ fn scan_mode(handle: usize, start: usize, length: usize, structural: bool) -> u3
                 if structural {
                     index.scan_structural(d.0.definition(), b, MAX)
                 } else {
-                    index.scan(d.0.definition(), b, MAX)
+                    d.0.scan(index, b, MAX)
                 }
             });
         match result {
@@ -178,7 +178,11 @@ fn scan_pac_mode(
             if extra {
                 supported.pop();
             }
-            result
+            let n = result?;
+            if !structural {
+                d.0.validate_pac(pac, b)?;
+            }
+            Ok(n)
         })();
         match result {
             Ok(n) => n as u32,
@@ -244,7 +248,7 @@ pub extern "C" fn json_definition() -> u32 {
     CODEC.with_borrow_mut(|c| match DefinitionDocument::from_json(&c.input) {
         Ok(d) => {
             c.document.clear();
-            c.document.extend_from_slice(d.as_cbor());
+            c.document.extend_from_slice(d.as_pil());
             c.document.len() as u32
         }
         Err(e) => {
@@ -280,3 +284,34 @@ pub extern "C" fn verify_crc32c(start: usize, length: usize, expected: u32) -> u
         }
     })
 }
+
+/// Convert JSON to nested PIL (mode 0) or a complete nested PIL record to JSON
+/// (mode 1). Input and output use the existing reusable ABI buffers.
+#[unsafe(no_mangle)]
+pub extern "C" fn schema_json(handle: usize, mode: u32) -> u32 {
+    CODEC.with_borrow_mut(|c| {
+        let result = c
+            .definitions
+            .get(handle)
+            .and_then(Option::as_ref)
+            .ok_or(Error::Invalid("definition handle"))
+            .and_then(|d| match mode {
+                0 => d.0.encode_json(&c.input),
+                1 => d.0.decode_json(&c.input),
+                _ => Err(Error::Invalid("JSON mode")),
+            });
+        match result {
+            Ok(b) => {
+                c.document = b;
+                c.document.len() as u32
+            }
+            Err(e) => {
+                c.error = e.to_string();
+                u32::MAX
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn deflate(level:u32)->u32 { CODEC.with_borrow_mut(|c| {match pil_codec::compression::deflate(&c.input,level,&mut c.inflated) {Ok(())=>c.inflated.len() as u32,Err(e)=>{c.error=e.to_string();u32::MAX}}}) }

@@ -1,6 +1,6 @@
 //! Experimental composition: nested PIL frames in BYTES / ARRAY<BYTES> fields.
 //! Hand-bound to nested_objects.cddl, not a CDDL compiler or a public OBJECT type.
-//! Definition documents still use CBOR; event payloads here contain no CBOR.
+//! Definitions and record payloads use PIL; CBOR is only a comparison baseline.
 use ciborium::Value as Cbor;
 use pil_codec::{
     ABSENT, Array, ArrayView, Definition, Error, Field, FrameIndex, NULL, Scalar, Type, Value,
@@ -337,10 +337,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let definitions = [&d.purchase, &d.customer, &d.address, &d.item]
         .iter()
-        .map(|d| d.to_cbor().unwrap().len())
+        .map(|d| d.to_pil().unwrap().len())
         .sum::<usize>();
     println!(
-        "One-time four-layout metadata: {definitions} bytes (existing CBOR definition documents; CDDL source {} bytes)",
+        "One-time four-layout metadata: {definitions} bytes (native PIL definition documents; CDDL source {} bytes)",
         SCHEMA.len()
     );
     let mut reader = Reader::default();

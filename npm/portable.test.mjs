@@ -1,16 +1,15 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {cbor} from 'pill-packer/cbor';
+import {decodeObject} from 'pill-packer/object';
 import {span,read} from 'pill-packer/layout';
-import {pacHeader,expandPAC,indexedPACBounds} from 'pill-packer/pac';
-import {mergeFrames} from 'pill-packer/compression';
+import {pacHeader,expandPAC,indexedPACBounds,mergeFrames} from 'pill-packer/pac';
 import {inflateGzip} from 'pill-packer/gzip';
 import {unsignedBig,unsignedNumber,shuffleColumns} from 'pill-packer/columns';
 import {createCodec} from './index.js';
 const bytes=s=>Uint8Array.from(Buffer.from(s,'base64'));
 const f=JSON.parse(await readFile(new URL('./fixtures/portable.json',import.meta.url),'utf8'));
-const definition=bytes(f.Definition),def=cbor(definition);
+const definition=bytes(f.Definition),def=decodeObject(definition);
 test('Go PAC compression interoperates with standalone browser and Rust/WASM readers',async()=>{
  const packed=bytes(f.Compressed),expanded=await expandPAC(packed,0,16*1024*1024);
  assert.deepEqual(expanded.bytes,bytes(f.PAC));

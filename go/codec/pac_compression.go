@@ -9,7 +9,8 @@ import (
 
 // The compressed representation has only framing/decoding controls outside gzip.
 // Its body expands to the original PAC header, extensions, prefix, and records.
-func CompressPAC(raw []byte, level int) ([]byte, error) {
+func CompressPAC(raw []byte, level int) ([]byte, error) { return CompressPACOptions(raw, level, false) }
+func CompressPACOptions(raw []byte, level int, onlyIfSmaller bool) ([]byte, error) {
 	if err := ValidatePlainPACEnvelope(raw); err != nil {
 		return nil, err
 	}
@@ -24,7 +25,7 @@ func CompressPAC(raw []byte, level int) ([]byte, error) {
 	if err = z.Close(); err != nil {
 		return nil, err
 	}
-	if body.Len()+PACCompressedHeaderSize >= len(raw) {
+	if onlyIfSmaller && body.Len()+PACCompressedHeaderSize >= len(raw) {
 		return raw, nil
 	}
 	out := make([]byte, PACCompressedHeaderSize, PACCompressedHeaderSize+body.Len())
@@ -37,7 +38,7 @@ func CompressPAC(raw []byte, level int) ([]byte, error) {
 
 func ValidatePlainPACEnvelope(raw []byte) error {
 	if len(raw) < PACHeaderSize || uint64(len(raw)) > PACMaximum ||
-		uint64(order.Uint32(raw[:4])) != uint64(len(raw)) || order.Uint32(raw[4:8]) > PACCommon ||
+		uint64(order.Uint32(raw[:4])) != uint64(len(raw)) || order.Uint32(raw[4:8]) & ^uint32(5) != 0 || order.Uint32(raw[4:8])&4 == 0 ||
 		order.Uint64(raw[8:16]) != uint64(len(raw)) || order.Uint64(raw[16:24]) < PACHeaderSize ||
 		order.Uint64(raw[16:24]) > uint64(len(raw)) || order.Uint64(raw[24:32]) > PACMaximumMembers {
 		return fmt.Errorf("invalid decoded PAC envelope")
@@ -50,7 +51,7 @@ func ExpandPAC(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("invalid PAC stored length")
 	}
 	flags := order.Uint32(raw[4:8])
-	if flags <= PACCommon {
+	if flags != PACGzip {
 		if err := ValidatePlainPACEnvelope(raw); err != nil {
 			return nil, err
 		}

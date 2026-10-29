@@ -1,6 +1,6 @@
-use crate::{ArrayView, CborRef, Definition, Error, Scalar, Type, uint, value};
+use crate::{ArrayView, Definition, Error, Scalar, Type, uint, value};
 
-/// Reusable offsets into an encoded frame. No decoded event or owned CBOR tree.
+/// Reusable offsets into an encoded frame. No decoded record or owned CBOR tree.
 #[derive(Default)]
 pub struct FrameIndex {
     spans: Vec<[u32; 2]>,
@@ -125,11 +125,11 @@ impl FrameIndex {
             }
             let bytes = &input[span[0] as usize..span[1] as usize];
             match field.kind {
-                Type::Scalar(Scalar::Cbor) => {
-                    if validate && field.name == "@fields" {
-                        crate::cbor::dynamic_fields(bytes, definition)?;
+                Type::Scalar(Scalar::Object) => {
+                    if field.name == "@fields" {
+                        crate::object::dynamic_fields(bytes, definition)?;
                     } else {
-                        CborRef::parse(bytes)?;
+                        crate::object::decode_value(bytes)?;
                     }
                 }
                 Type::Scalar(k) => {

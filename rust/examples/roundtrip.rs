@@ -2,7 +2,7 @@ use pil_codec::{Array, Definition, Field, Frames, Scalar, Type, Value, encode};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let definition = Definition::new(
-        "event",
+        "record",
         1,
         vec![
             Field::new("id", Scalar::Uuid),
@@ -12,8 +12,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Field::new("durations", Type::Array(Scalar::U16)),
         ],
     )?;
-    let definition_bytes = definition.to_cbor()?;
-    let negotiated = Definition::from_cbor(&definition_bytes)?;
+    let definition_bytes = definition.to_pil()?;
+    let negotiated = Definition::from_pil(&definition_bytes)?;
     let durations = [Value::U16(100), Value::U16(200), Value::U16(300)];
     let first = encode(
         &definition,

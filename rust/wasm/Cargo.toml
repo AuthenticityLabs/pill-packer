@@ -6,12 +6,12 @@ rust-version = "1.88"
 license = "Apache-2.0"
 description = "WebAssembly bindings for the Pill Packer codec"
 repository = "https://github.com/AuthenticityLabs/pill-packer"
-homepage = "https://trietrunk.com/PIL"
+homepage = "https://github.com/AuthenticityLabs/pill-packer"
 publish = false
 [lib]
 crate-type = ["cdylib"]
 [dependencies]
-pil-codec = { package = "pill-packer", path = "..", features = ["gzip", "json"] }
+pil-codec = { package = "pill-packer", path = "..", features = ["gzip", "schema-runtime"] }
 sha2 = "0.10"
 
 [profile.release]

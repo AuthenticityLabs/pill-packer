@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"unicode/utf8"
 )
 
@@ -25,18 +26,22 @@ type PACExtension struct {
 }
 
 type PAC struct {
-	Digest     [32]byte
-	Common     []byte
-	Members    [][]byte
-	Extensions []PACExtension
-	Bytes      []byte
+	Digest       [32]byte
+	Common       []byte
+	Members      [][]byte
+	Extensions   []PACExtension
+	Bytes        []byte
+	Headers      map[string][]byte
+	AddressBytes int
+	RecordWidth  uint32
+	Directory    []byte
 }
 
-// TODO: Add the Definition-requested fixed-width/verified-stride mode described
-// in README.md. Do not infer fixed-width records from scalar types alone.
+// Members remain variable length: field types do not require every field to be
+// present. Preserve ABSENT/NULL states without fabricated payload slots.
 
-// PackPAC factors only equal, present positional values. No semantic map, trie
-// expansion, reordered records, or changed ABSENT/NULL semantics.
+// PackPAC factors only equal, present positional values. It does not construct
+// semantic maps, reorder records, or change ABSENT/NULL semantics.
 func PackPAC(l *Layout, frames [][]byte, extensions []PACExtension, prefix bool) (*PAC, error) {
 	p, err := FactorPAC(l, frames, extensions, prefix)
 	if err != nil {
@@ -90,7 +95,7 @@ func FactorPAC(l *Layout, frames [][]byte, extensions []PACExtension, prefix boo
 	p := &PAC{Digest: l.Digest, Members: frames, Extensions: extensions}
 	if len(active) > 0 {
 		var err error
-		p.Common, err = l.Encode(nil, common)
+		p.Common, err = l.encodeFragment(nil, common)
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +104,7 @@ func FactorPAC(l *Layout, frames [][]byte, extensions []PACExtension, prefix boo
 		var scratch []byte
 		size := len(p.Common)
 		for i, raw := range frames {
-			if err = l.ScanPlain(raw, &scan); err != nil {
+			if err = l.scanFragment(raw, &scan); err != nil {
 				return nil, err
 			}
 			for f, v := range common {
@@ -107,7 +112,7 @@ func FactorPAC(l *Layout, frames [][]byte, extensions []PACExtension, prefix boo
 					scan.Values[f] = Value{}
 				}
 			}
-			scratch, err = l.Encode(scratch, scan.Values)
+			scratch, err = l.encodeFragment(scratch, scan.Values)
 			if err != nil {
 				return nil, err
 			}
@@ -128,9 +133,10 @@ func FactorPAC(l *Layout, frames [][]byte, extensions []PACExtension, prefix boo
 
 func (p *PAC) Marshal() ([]byte, error) {
 	h := make([]byte, PACHeaderSize)
+	order.PutUint32(h[4:8], 4)
 
 	if len(p.Common) > 0 {
-		order.PutUint32(h[4:8], PACCommon)
+		order.PutUint32(h[4:8], PACCommon|4)
 	}
 	order.PutUint64(h[24:32], uint64(len(p.Members)))
 	copy(h[32:64], p.Digest[:])
@@ -154,8 +160,52 @@ func (p *PAC) Marshal() ([]byte, error) {
 		h = Extended(h, uint64(len(e.Data)))
 		h = append(h, e.Data...)
 	}
+	if p.AddressBytes != 0 && p.AddressBytes != 2 && p.AddressBytes != 3 && p.AddressBytes != 4 {
+		return nil, fmt.Errorf("invalid PAC address width")
+	}
+	h = append(h, byte(p.AddressBytes))
+	h = order.AppendUint32(h, p.RecordWidth)
+	names := make([]string, 0, len(p.Headers))
+	for name := range p.Headers {
+		if name == "" || !utf8.ValidString(name) {
+			return nil, fmt.Errorf("invalid PAC header name")
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	h = Extended(h, uint64(len(names)))
+	for _, name := range names {
+		h = Extended(h, uint64(len(name)))
+		h = append(h, name...)
+		h = Extended(h, uint64(len(p.Headers[name])))
+		h = append(h, p.Headers[name]...)
+	}
 	h = Extended(h, uint64(len(p.Common)))
 	h = append(h, p.Common...)
+	var memberOffset uint64
+	var directory []byte
+	if p.AddressBytes > 0 {
+		directory = make([]byte, len(p.Members)*p.AddressBytes)
+	}
+	for i, m := range p.Members {
+		if len(m) == 0 || p.RecordWidth > 0 && len(m) != int(p.RecordWidth) {
+			return nil, fmt.Errorf("invalid PAC member width")
+		}
+		if p.AddressBytes > 0 {
+			if memberOffset >= uint64(1)<<(8*p.AddressBytes) {
+				return nil, fmt.Errorf("PAC address overflow")
+			}
+			for j := 0; j < p.AddressBytes; j++ {
+				directory[i*p.AddressBytes+j] = byte(memberOffset >> (8 * j))
+			}
+		}
+		memberOffset += uint64(len(m))
+	}
+	if p.Directory != nil && !bytes.Equal(directory, p.Directory) {
+		return nil, fmt.Errorf("PAC directory does not match final members")
+	}
+	p.Directory = directory
+	h = append(h, directory...)
 	order.PutUint64(h[16:24], uint64(len(h)))
 	total := len(h)
 	for _, m := range p.Members {
@@ -184,7 +234,7 @@ func ParsePAC(l *Layout, raw []byte, supported map[uint32]bool) (*PAC, error) {
 	size := order.Uint64(raw[8:16])
 	head := order.Uint64(raw[16:24])
 	count := order.Uint64(raw[24:32])
-	if flags & ^PACCommon != 0 || size != uint64(len(raw)) || size > PACMaximum || head < PACHeaderSize || head > size {
+	if flags & ^uint32(5) != 0 || flags&4 == 0 || size != uint64(len(raw)) || size > PACMaximum || head < PACHeaderSize || head > size {
 		return nil, fmt.Errorf("invalid PAC bounds/features")
 	}
 	p := &PAC{Bytes: raw}
@@ -226,14 +276,52 @@ func ParsePAC(l *Layout, raw []byte, supported map[uint32]bool) (*PAC, error) {
 		p.Extensions = append(p.Extensions, PACExtension{kind, ef == 1, raw[at : at+int(length)]})
 		at += int(length)
 	}
+	if int(head)-at < 5 {
+		return nil, io.ErrUnexpectedEOF
+	}
+	p.AddressBytes = int(raw[at])
+	p.RecordWidth = order.Uint32(raw[at+1:])
+	at += 5
+	if p.AddressBytes != 0 && p.AddressBytes != 2 && p.AddressBytes != 3 && p.AddressBytes != 4 {
+		return nil, fmt.Errorf("invalid PAC address width")
+	}
+	names, e := ReadExtended(raw[:head], &at)
+	if e != nil || names > uint64((int(head)-at)/4) {
+		return nil, fmt.Errorf("invalid PAC headers")
+	}
+	p.Headers = map[string][]byte{}
+	lastName := ""
+	for ; names > 0; names-- {
+		n, e := ReadExtended(raw[:head], &at)
+		if e != nil || n == 0 || n > head-uint64(at) {
+			return nil, fmt.Errorf("invalid PAC header name")
+		}
+		name := string(raw[at : at+int(n)])
+		at += int(n)
+		if !utf8.ValidString(name) || name <= lastName {
+			return nil, fmt.Errorf("invalid PAC header order")
+		}
+		lastName = name
+		n, e = ReadExtended(raw[:head], &at)
+		if e != nil || n > head-uint64(at) {
+			return nil, fmt.Errorf("invalid PAC header value")
+		}
+		p.Headers[name] = raw[at : at+int(n)]
+		at += int(n)
+	}
 	common, e := ReadExtended(raw[:head], &at)
-	if e != nil || common != head-uint64(at) || (common > 0) != (flags&PACCommon != 0) {
+	if e != nil || common > head-uint64(at) || (common > 0) != (flags&PACCommon != 0) {
 		return nil, fmt.Errorf("invalid PAC common frame")
 	}
-	p.Common = raw[at:head]
+	p.Common = raw[at : at+int(common)]
+	at += int(common)
+	if count*uint64(p.AddressBytes) != head-uint64(at) {
+		return nil, fmt.Errorf("invalid PAC directory length")
+	}
+	p.Directory = raw[at:head]
 	var prefix Frame
 	if common > 0 {
-		if e = l.ScanPlain(p.Common, &prefix); e != nil {
+		if e = l.scanFragment(p.Common, &prefix); e != nil {
 			return nil, e
 		}
 	}
@@ -247,16 +335,34 @@ func ParsePAC(l *Layout, raw []byte, supported map[uint32]bool) (*PAC, error) {
 	var scratch []byte
 	for i := uint64(0); i < count; i++ {
 		start := len(raw) - r.Len()
-		if scratch, e = l.ReadFrameEnvelope(r, scratch, false); e != nil {
+		if scratch, e = l.ReadFrame(r, scratch); e != nil {
 			return nil, e
 		}
 		member := raw[start : len(raw)-r.Len()]
-		if e = l.ScanPlain(member, &scan); e != nil {
+		if e = l.scanFragment(member, &scan); e != nil {
 			return nil, e
 		}
 		for f, v := range prefix.Values {
 			if v.State != Absent && scan.Values[f].State != Absent {
 				return nil, fmt.Errorf("PAC common field overridden")
+			}
+		}
+		if l.schema != nil {
+			if _, err := ResolvePAC(l, p.Common, member); err != nil {
+				return nil, err
+			}
+		}
+		ordinal := int(i)
+		if p.RecordWidth > 0 && len(member) != int(p.RecordWidth) {
+			return nil, fmt.Errorf("PAC fixed member width mismatch")
+		}
+		if p.AddressBytes > 0 {
+			var offset uint64
+			for j := 0; j < p.AddressBytes; j++ {
+				offset |= uint64(p.Directory[ordinal*p.AddressBytes+j]) << (8 * j)
+			}
+			if offset != uint64(start)-head {
+				return nil, fmt.Errorf("PAC member directory mismatch")
 			}
 		}
 		p.Members = append(p.Members, member)
@@ -270,11 +376,11 @@ func ParsePAC(l *Layout, raw []byte, supported map[uint32]bool) (*PAC, error) {
 // ResolvePAC is an explicit standalone export, not the presentation/storage path.
 func ResolvePAC(l *Layout, common, member []byte) ([]byte, error) {
 	var c, m Frame
-	if err := l.ScanPlain(member, &m); err != nil {
+	if err := l.scanFragment(member, &m); err != nil {
 		return nil, err
 	}
 	if len(common) > 0 {
-		if err := l.ScanPlain(common, &c); err != nil {
+		if err := l.scanFragment(common, &c); err != nil {
 			return nil, err
 		}
 		for i, v := range c.Values {

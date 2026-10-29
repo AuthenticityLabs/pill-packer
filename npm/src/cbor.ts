@@ -1,5 +1,5 @@
 // CBOR is opened only for definitions and individual requested field values.
-// Events themselves remain PIL byte ranges. Integer precision is never rounded.
+// Records themselves remain PIL byte ranges. Integer precision is never rounded.
 const decoder = new TextDecoder("utf-8", { fatal: true });
 export function cbor(bytes: Uint8Array): unknown {
   let at = 0;

@@ -126,7 +126,7 @@ fn reusable_encoder_matches_wire_and_recovers_after_error() {
         vec![
             Field::new("text", Scalar::String),
             Field::mapped("level", ["INFO", "ERROR"]),
-            Field::new("data", Scalar::Cbor),
+            Field::new("data", Scalar::Object),
             Field::new("array", Type::Array(Scalar::U16)),
         ],
     )
@@ -138,12 +138,13 @@ fn reusable_encoder_matches_wire_and_recovers_after_error() {
         let values = [
             Value::String(&text),
             Value::Mapped(1),
-            Value::Cbor(b"\xa1\x01\x02"),
+            Value::Object(&native(b"\xa1\x01\x02")),
             Value::Array(Array::Items(&array)),
         ];
         let expected = encode(&definition, &values).unwrap();
         let mut direct = values;
-        direct[2] = Value::ValidatedCbor(CborRef::parse(b"\xa1\x01\x02").unwrap());
+        let object = native(b"\xa1\x01\x02");
+        direct[2] = Value::Object(&object);
         assert_eq!(
             encoder.encode_with(&definition, |i| Ok(direct[i])).unwrap(),
             expected
@@ -163,16 +164,19 @@ fn reusable_encoder_matches_wire_and_recovers_after_error() {
 
 #[test]
 fn validated_cbor_still_observes_array_and_dynamic_field_rules() {
-    let array =
-        Definition::new("array", 1, vec![Field::new("v", Type::Array(Scalar::Cbor))]).unwrap();
-    let values = [Value::ValidatedCbor(CborRef::parse(&[0xf6]).unwrap())];
+    let array = Definition::new(
+        "array",
+        1,
+        vec![Field::new("v", Type::Array(Scalar::Object))],
+    )
+    .unwrap();
+    let values = [Value::Object(&native(&[0xf6]))];
     assert!(encode(&array, &[Value::Array(Array::Items(&values))]).is_err());
-    let fields = Definition::new("fields", 1, vec![Field::new("@fields", Scalar::Cbor)]).unwrap();
-    assert!(
-        encode(
-            &fields,
-            &[Value::ValidatedCbor(CborRef::parse(&[0]).unwrap())]
-        )
-        .is_err()
-    );
+    let fields = Definition::new("fields", 1, vec![Field::new("@fields", Scalar::Object)]).unwrap();
+    assert!(encode(&fields, &[Value::Object(&native(&[0]))]).is_err());
+}
+
+fn native(raw: &[u8]) -> Vec<u8> {
+    let value: ciborium::Value = ciborium::from_reader(raw).unwrap();
+    pil_codec::object::encode_value(&value).unwrap()
 }

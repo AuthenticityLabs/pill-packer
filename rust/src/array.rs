@@ -1,4 +1,4 @@
-use crate::{Error, Scalar, Value, cbor, uint, value};
+use crate::{Error, Scalar, Value, uint, value};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Array<'a> {
@@ -77,8 +77,8 @@ impl<'a> ArrayView<'a> {
             values_start: cursor,
         };
         for element in view.iter() {
-            if let Value::Cbor(bytes) = element?
-                && matches!(cbor::parse(bytes)?, ciborium::Value::Null)
+            if let Value::Object(bytes) = element?
+                && matches!(crate::object::decode_value(bytes)?, ciborium::Value::Null)
             {
                 return Err(Error::Invalid("null array element"));
             }
@@ -158,27 +158,20 @@ pub(crate) fn encode(kind: Scalar, array: Array<'_>, output: &mut Vec<u8>) -> Re
     uint::write(items.len() as u64, output);
     let mut payload = Vec::new();
     for &item in items {
-        if item.scalar() != Some(kind) {
+        if !kind.accepts(item) {
             return Err(Error::Invalid(
                 "array element type mismatch or null element",
             ));
         }
         if kind.width().is_some() {
-            value::write(item, output)?;
+            value::write_as(kind, item, output)?;
         } else {
-            if let Value::ValidatedCbor(value) = item {
-                if value.is_null() {
-                    return Err(Error::Invalid("null array element"));
-                }
-                payload.extend_from_slice(value.as_bytes());
-            } else if let Value::Cbor(bytes) = item {
-                if matches!(cbor::parse(bytes)?, ciborium::Value::Null) {
-                    return Err(Error::Invalid("null array element"));
-                }
-                payload.extend_from_slice(bytes);
-            } else {
-                value::write(item, &mut payload)?;
+            if let Value::Object(bytes) = item
+                && matches!(crate::object::decode_value(bytes)?, ciborium::Value::Null)
+            {
+                return Err(Error::Invalid("null array element"));
             }
+            value::write(item, &mut payload)?;
             uint::write(payload.len() as u64, output);
         }
     }

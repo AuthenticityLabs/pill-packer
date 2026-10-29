@@ -1,4 +1,4 @@
-use crate::{Array, ArrayView, Definition, Error, Type, Value, array, cbor, uint, value};
+use crate::{Array, ArrayView, Definition, Error, Type, Value, array, uint, value};
 
 pub fn encode(definition: &Definition, values: &[Value<'_>]) -> Result<Vec<u8>, Error> {
     let mut encoder = FrameEncoder::default();
@@ -80,12 +80,12 @@ impl FrameEncoder {
                     let Type::Scalar(kind) = field.kind else {
                         return Err(Error::Invalid("scalar supplied to array field"));
                     };
-                    if scalar.scalar() != Some(kind) {
+                    if !kind.accepts(scalar) {
                         return Err(Error::Invalid("field value type mismatch"));
                     }
                     if kind.width().is_some() {
                         let start = direct.len();
-                        value::write(scalar, direct)?;
+                        value::write_as(kind, scalar, direct)?;
                         let f = definition.integers[index];
                         if f.bits != 0 {
                             let code = f.code(&direct[start..]);
@@ -98,11 +98,10 @@ impl FrameEncoder {
                     } else {
                         if field.name == "@fields" {
                             let bytes = match scalar {
-                                Value::Cbor(bytes) => bytes,
-                                Value::ValidatedCbor(value) => value.as_bytes(),
+                                Value::Object(bytes) => bytes,
                                 _ => unreachable!(),
                             };
-                            cbor::dynamic_fields(bytes, definition)?;
+                            crate::object::dynamic_fields(bytes, definition)?;
                             variable.extend_from_slice(bytes);
                         } else {
                             value::write(scalar, variable)?;
@@ -249,7 +248,7 @@ pub fn decode<'a>(definition: &'a Definition, input: &'a [u8]) -> Result<Frame<'
         values[index] = match field.kind {
             Type::Scalar(kind) => {
                 if field.name == "@fields" {
-                    cbor::dynamic_fields(bytes, definition)?;
+                    crate::object::dynamic_fields(bytes, definition)?;
                     value::read(kind, bytes, false)?
                 } else {
                     value::read(kind, bytes, true)?

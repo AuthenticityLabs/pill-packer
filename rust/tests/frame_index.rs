@@ -15,7 +15,7 @@ fn borrowed_index_matches_codec_and_rejects_every_truncation() {
             Field::new("text", Scalar::String),
             Field::new("bytes", Scalar::Bytes),
             Field::new("array", Type::Array(Scalar::U16)),
-            Field::new("object", Scalar::Cbor),
+            Field::new("object", Scalar::Object),
         ],
     )
     .unwrap();
@@ -29,7 +29,7 @@ fn borrowed_index_matches_codec_and_rejects_every_truncation() {
             Value::String("aλ"),
             Value::Bytes(&[]),
             Value::Array(Array::Items(&[Value::U16(4), Value::U16(6)])),
-            Value::Cbor(&[0xa1, 0x00, 0x18, 0x2a]),
+            Value::Object(&native(&[0xa1, 0x00, 0x18, 0x2a])),
         ],
     )
     .unwrap();
@@ -57,12 +57,16 @@ fn extended_offsets_empty_arrays_and_cbormaps_are_validated() {
         1,
         vec![
             Field::new("payload", Scalar::Bytes),
-            Field::new("end", Scalar::Cbor),
+            Field::new("end", Scalar::Object),
         ],
     )
     .unwrap();
     let payload = vec![42; 65535];
-    let data = encode(&d, &[Value::Bytes(&payload), Value::Cbor(&[0xf6])]).unwrap();
+    let data = encode(
+        &d,
+        &[Value::Bytes(&payload), Value::Object(&native(&[0xf6]))],
+    )
+    .unwrap();
     let mut index = FrameIndex::default();
     assert_eq!(index.scan(&d, &data, 1 << 20).unwrap(), data.len());
     let mut corrupt = data.clone();
@@ -78,7 +82,7 @@ fn structural_scan_skips_values_but_preserves_safe_boundaries() {
         vec![
             Field::mapped("code", ["one"]),
             Field::new("text", Scalar::String),
-            Field::new("object", Scalar::Cbor),
+            Field::new("object", Scalar::Object),
         ],
     )
     .unwrap();
@@ -87,7 +91,7 @@ fn structural_scan_skips_values_but_preserves_safe_boundaries() {
         &[
             Value::Mapped(0),
             Value::String("text"),
-            Value::Cbor(&[0xf6]),
+            Value::Object(&native(&[0xf6])),
         ],
     )
     .unwrap();
@@ -111,4 +115,9 @@ fn structural_scan_skips_values_but_preserves_safe_boundaries() {
         assert_eq!(fast.spans(), spans);
     }
     assert!(fast.scan_structural(&d, &good, good.len() - 1).is_err());
+}
+
+fn native(raw: &[u8]) -> Vec<u8> {
+    let value: ciborium::Value = ciborium::from_reader(raw).unwrap();
+    pil_codec::object::encode_value(&value).unwrap()
 }

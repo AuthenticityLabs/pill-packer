@@ -5,7 +5,7 @@ fn references_keep_all_sixteen_bits_and_presence_states() {
     let definition =
         Definition::new("shared", 1, vec![Field::new("reference", Scalar::Ref16)]).unwrap();
     assert_eq!(
-        Definition::from_cbor(&definition.to_cbor().unwrap()).unwrap(),
+        Definition::from_pil(&definition.to_pil().unwrap()).unwrap(),
         definition
     );
     for (value, bytes) in [

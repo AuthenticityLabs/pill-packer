@@ -15,11 +15,16 @@ pil-field = {
   * tstr => any
 }
 pil-scalar = "BOOL" / "I8" / "I16" / "I32" / "I64"
-           / "U8" / "U16" / "U32" / "U64" / "F32" / "F64"
+           / "U8" / "U16" / "U24" / "U32" / "U64" / "F32" / "F64"
            / "UUID" / "TIMESTAMP_MS" / "TIMESTAMP_US" / "TIMESTAMP_NS"
-           / "REF16" / "STRING" / "BYTES" / "CBOR"
+           / "REF16" / "STRING" / pil-fixed-string / "BYTES" / "OBJECT"
 pil-array = "ARRAY<BOOL>" / "ARRAY<I8>" / "ARRAY<I16>" / "ARRAY<I32>" / "ARRAY<I64>"
-          / "ARRAY<U8>" / "ARRAY<U16>" / "ARRAY<U32>" / "ARRAY<U64>"
+          / "ARRAY<U8>" / "ARRAY<U16>" / "ARRAY<U24>" / "ARRAY<U32>" / "ARRAY<U64>"
           / "ARRAY<F32>" / "ARRAY<F64>" / "ARRAY<UUID>"
           / "ARRAY<TIMESTAMP_MS>" / "ARRAY<TIMESTAMP_US>" / "ARRAY<TIMESTAMP_NS>"
-          / "ARRAY<REF16>" / "ARRAY<STRING>" / "ARRAY<BYTES>" / "ARRAY<CBOR>"
+          / "ARRAY<REF16>" / "ARRAY<STRING>" / "ARRAY<BYTES>" / "ARRAY<OBJECT>" / "ARRAY<CBOR>"
+          / pil-fixed-string-array
+
+; Capacities are positive UTF-8 byte counts; codecs validate their numeric bounds.
+pil-fixed-string = tstr .regexp "STRING\\([1-9][0-9]*\\)"
+pil-fixed-string-array = tstr .regexp "ARRAY<STRING\\([1-9][0-9]*\\)>"

@@ -42,3 +42,11 @@ pub use adaptive::AdaptiveIntegers;
 pub mod compression;
 
 pub mod checksum;
+
+pub mod object;
+
+#[cfg(feature = "schema-runtime")]
+pub mod schema;
+
+mod borrowed_object;
+pub use borrowed_object::{ObjectMap, ObjectRef};

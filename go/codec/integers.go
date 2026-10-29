@@ -249,10 +249,10 @@ func (l *Layout) ValidDirectWidth(i int, b []byte) bool {
 	return w == l.Widths[i]
 }
 
-// Identity postings/state keys span definition minors. Their representation must
-// not change when a later definition enables shortening. Only identity paths
-// normalize; ordinary scans/assembly continue to borrow encoded scalar spans.
-func (l *Layout) IdentityValue(i int, v Value) Value {
+// NormalizeIntegerWidth expands an adaptively shortened direct integer to its
+// declared scalar width. Callers can use this when a stable-width value is
+// needed outside the encoded frame; ordinary scans continue to borrow its span.
+func (l *Layout) NormalizeIntegerWidth(i int, v Value) Value {
 	if i < 0 || l.integers == nil || !l.integers.fields[i].eligible || v.State != Direct || len(v.Bytes) == 0 || len(v.Bytes) >= l.Widths[i] {
 		return v
 	}
@@ -337,6 +337,11 @@ func (a *integerLayout) scan(raw []byte, reuse *Frame) error {
 			at += w
 			if f.eligible && w > 1 && 1<<a.code(i, v.Bytes) != w {
 				return fmt.Errorf("noncanonical integer Width")
+			}
+			if capacity, ok := FixedStringCapacity(a.layout.Definition.Fields[i].Type); ok {
+				if _, err := FixedString(v.Bytes, capacity); err != nil {
+					return err
+				}
 			}
 			if f.boolean && v.Bytes[0] > 1 {
 				return fmt.Errorf("invalid bool")

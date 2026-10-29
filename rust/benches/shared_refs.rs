@@ -31,13 +31,13 @@ struct Node {
     key: usize,
     code: u64,
 }
-struct Trie {
+struct PrefixTree {
     nodes: Vec<Node>,
     paths: Vec<Vec<(usize, Value<'static>)>>,
     leaves: Vec<u16>,
     values: Vec<Vec<Value<'static>>>,
 }
-impl Trie {
+impl PrefixTree {
     fn new(depth: usize) -> Self {
         let mut t = Self {
             nodes: vec![Node {
@@ -170,13 +170,13 @@ impl Layout {
 }
 fn records(
     layout: &Layout,
-    trie: &Trie,
+    prefix_tree: &PrefixTree,
     present_shared: usize,
     present_dynamic: usize,
     full: bool,
     count: usize,
 ) -> Vec<Record> {
-    let leaves: Vec<_> = trie
+    let leaves: Vec<_> = prefix_tree
         .paths
         .iter()
         .enumerate()
@@ -211,15 +211,15 @@ fn records(
 }
 fn pil_encode<'a>(
     layout: &Layout,
-    trie: &Trie,
+    prefix_tree: &PrefixTree,
     row: &Record,
     refs: bool,
     encoder: &'a mut FrameEncoder,
 ) -> &'a [u8] {
-    let values = trie
+    let values = prefix_tree
         .values
         .get(usize::from(row.leaf))
-        .expect("unknown shared reference"); // cached group, not a timed trie walk
+        .expect("unknown shared reference"); // cached group, not a timed prefix_tree walk
     let mut dynamic = row.dynamic.iter().peekable();
     encoder
         .encode_with(layout.definition(refs), |wire| {
@@ -271,8 +271,14 @@ fn cbor_pair(key: usize, v: Value<'_>, out: &mut Vec<u8>) {
     head(Header::Positive(key as u64), out);
     cbor_value(v, out)
 }
-fn cbor_encode(layout: &Layout, trie: &Trie, row: &Record, refs: bool, out: &mut Vec<u8>) {
-    let path = trie.path(row.leaf);
+fn cbor_encode(
+    layout: &Layout,
+    prefix_tree: &PrefixTree,
+    row: &Record,
+    refs: bool,
+    out: &mut Vec<u8>,
+) {
+    let path = prefix_tree.path(row.leaf);
     out.clear();
     head(
         Header::Map(Some(
@@ -340,7 +346,7 @@ fn cbor_read<'a>(field: &Field, b: &mut &'a [u8]) -> Value<'a> {
 #[allow(clippy::too_many_arguments)]
 fn cbor_decode<'a>(
     layout: &Layout,
-    trie: &Trie,
+    prefix_tree: &PrefixTree,
     mut b: &'a [u8],
     refs: bool,
     expand: bool,
@@ -368,7 +374,7 @@ fn cbor_decode<'a>(
             let Value::Ref16(id) = value else {
                 panic!("invalid shared reference")
             };
-            let path = trie.path(id);
+            let path = prefix_tree.path(id);
             reference = Some(id);
             if expand {
                 out.extend_from_slice(path)
@@ -412,7 +418,7 @@ fn pil_read<'a>(definition: &Definition, b: &'a [u8], key: usize, span: [u32; 2]
 }
 fn pil_decode<'a>(
     layout: &Layout,
-    trie: &Trie,
+    prefix_tree: &PrefixTree,
     b: &'a [u8],
     refs: bool,
     expand: bool,
@@ -425,7 +431,7 @@ fn pil_decode<'a>(
         match pil_read(d, b, 1, index.spans()[1]) {
             Value::Absent => None,
             Value::Ref16(id) => {
-                black_box(trie.path(id));
+                black_box(prefix_tree.path(id));
                 Some(id)
             }
             _ => panic!("invalid shared reference"),
@@ -442,7 +448,7 @@ fn pil_decode<'a>(
             continue;
         }
         if refs && key == 1 {
-            out.extend_from_slice(trie.path(reference.unwrap()));
+            out.extend_from_slice(prefix_tree.path(reference.unwrap()));
             continue;
         }
         out.push((layout.logical(key, refs), pil_read(d, b, key, span)));
@@ -505,15 +511,15 @@ fn report(
         ns[6]
     );
 }
-fn verify(layout: &Layout, trie: &Trie, row: &Record, p: &[u8], c: &[u8], refs: bool) {
+fn verify(layout: &Layout, prefix_tree: &PrefixTree, row: &Record, p: &[u8], c: &[u8], refs: bool) {
     let mut expected: Output = row.dynamic.iter().map(|(k, v)| (*k, v.value())).collect();
-    expected.extend_from_slice(trie.path(row.leaf));
+    expected.extend_from_slice(prefix_tree.path(row.leaf));
     expected.sort_unstable_by_key(|(key, _)| *key);
     let mut index = FrameIndex::default();
     let (mut po, mut co) = (vec![], vec![]);
     let mut seen = vec![0; layout.full.fields().len()];
-    pil_decode(layout, trie, p, refs, true, &mut index, &mut po);
-    cbor_decode(layout, trie, c, refs, true, &mut seen, 1, &mut co);
+    pil_decode(layout, prefix_tree, p, refs, true, &mut index, &mut po);
+    cbor_decode(layout, prefix_tree, c, refs, true, &mut seen, 1, &mut co);
     assert_eq!(po, expected);
     assert_eq!(co, expected);
     let decoded = pil_codec::decode_exact(layout.definition(refs), p).unwrap();
@@ -534,13 +540,14 @@ fn verify(layout: &Layout, trie: &Trie, row: &Record, p: &[u8], c: &[u8], refs: 
             + if refs {
                 usize::from(row.leaf != 0)
             } else {
-                trie.path(row.leaf).len()
+                prefix_tree.path(row.leaf).len()
             }
     );
-    pil_decode(layout, trie, p, refs, false, &mut index, &mut po);
+    pil_decode(layout, prefix_tree, p, refs, false, &mut index, &mut po);
     for &(key, value) in &expected {
         let observed = if refs && (1..=layout.shared).contains(&key) {
-            trie.path(row.leaf)
+            prefix_tree
+                .path(row.leaf)
                 .iter()
                 .find(|(k, _)| *k == key)
                 .map_or(Value::Absent, |(_, v)| *v)
@@ -561,7 +568,7 @@ fn main() {
     let maximum = arg("--max").unwrap_or("1000000").parse::<usize>().unwrap();
     let reverse = args.iter().any(|x| x == "--reverse");
     println!(
-        "shape,representation,events,codec,operation,encoded_bytes,median_ns,min_ns,max_ns,samples_ns"
+        "shape,representation,records,codec,operation,encoded_bytes,median_ns,min_ns,max_ns,samples_ns"
     );
     for (shape, count, shared, present_shared, present, full) in [
         ("object8_full", 8, 4, 4, 4, true),
@@ -579,12 +586,19 @@ fn main() {
             continue;
         }
         let layout = Layout::new(count, shared);
-        let trie = Trie::new(shared);
-        trie.check();
-        let records = records(&layout, &trie, present_shared, present, full, maximum);
+        let prefix_tree = PrefixTree::new(shared);
+        prefix_tree.check();
+        let records = records(
+            &layout,
+            &prefix_tree,
+            present_shared,
+            present,
+            full,
+            maximum,
+        );
         eprintln!(
-            "{shape}: {maximum} events, {present_shared}/{shared} shared fields, {present} supplied dynamic fields, {} trie nodes; definitions and paths cached",
-            trie.nodes.len()
+            "{shape}: {maximum} records, {present_shared}/{shared} shared fields, {present} supplied dynamic fields, {} prefix_tree nodes; definitions and paths cached",
+            prefix_tree.nodes.len()
         );
         let mut sizes: Vec<_> = [1000, 10000, 50000, 100000, 1000000]
             .into_iter()
@@ -602,16 +616,16 @@ fn main() {
             let mut pe = FrameEncoder::default();
             let mut ce = vec![];
             for (i, row) in records.iter().enumerate() {
-                let p = pil_encode(&layout, &trie, row, refs, &mut pe);
-                cbor_encode(&layout, &trie, row, refs, &mut ce);
+                let p = pil_encode(&layout, &prefix_tree, row, refs, &mut pe);
+                cbor_encode(&layout, &prefix_tree, row, refs, &mut ce);
                 if i < 1024 || i.is_multiple_of(10007) || i + 1 == maximum {
-                    verify(&layout, &trie, row, p, &ce, refs)
+                    verify(&layout, &prefix_tree, row, p, &ce, refs)
                 }
                 pil.push(p);
                 cbor.push(&ce);
             }
             // Root and internal-prefix references preserve shared-field absence.
-            for leaf in 0..u16::try_from(trie.nodes.len()).unwrap() {
+            for leaf in 0..u16::try_from(prefix_tree.nodes.len()).unwrap() {
                 let row = Record {
                     leaf,
                     dynamic: vec![
@@ -619,9 +633,9 @@ fn main() {
                         (count - 1, Atom::Scalar(Value::Null)),
                     ],
                 };
-                let p = pil_encode(&layout, &trie, &row, refs, &mut pe);
-                cbor_encode(&layout, &trie, &row, refs, &mut ce);
-                verify(&layout, &trie, &row, p, &ce, refs);
+                let p = pil_encode(&layout, &prefix_tree, &row, refs, &mut pe);
+                cbor_encode(&layout, &prefix_tree, &row, refs, &mut ce);
+                verify(&layout, &prefix_tree, &row, p, &ce, refs);
             }
             for &n in &sizes {
                 eprintln!("{shape} {} {n}", if refs { "REF16" } else { "no_REF" });
@@ -638,7 +652,7 @@ fn main() {
                                     if codec == "PIL" {
                                         black_box(pil_encode(
                                             black_box(&layout),
-                                            black_box(&trie),
+                                            black_box(&prefix_tree),
                                             black_box(row),
                                             refs,
                                             &mut pe,
@@ -646,7 +660,7 @@ fn main() {
                                     } else {
                                         cbor_encode(
                                             black_box(&layout),
-                                            black_box(&trie),
+                                            black_box(&prefix_tree),
                                             black_box(row),
                                             refs,
                                             &mut ce,
@@ -671,7 +685,7 @@ fn main() {
                                         if codec == "PIL" {
                                             black_box(pil_decode(
                                                 black_box(&layout),
-                                                black_box(&trie),
+                                                black_box(&prefix_tree),
                                                 black_box(b.frame(i)),
                                                 refs,
                                                 expand,
@@ -683,7 +697,7 @@ fn main() {
                                             epoch += 1;
                                             black_box(cbor_decode(
                                                 black_box(&layout),
-                                                black_box(&trie),
+                                                black_box(&prefix_tree),
                                                 black_box(b.frame(i)),
                                                 refs,
                                                 expand,

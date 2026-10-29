@@ -6,7 +6,7 @@ use pil_codec::{
 #[test]
 fn go_prefix_fixture_borrowed_roundtrip_and_malformed() {
     let raw = include_bytes!("fixtures/pac/packed.pac");
-    let d = Definition::from_cbor(include_bytes!("fixtures/pac/definition.cbor")).unwrap();
+    let d = Definition::from_pil(include_bytes!("fixtures/pac/definition.rx")).unwrap();
     let digest: [u8; 32] = raw[32..64].try_into().unwrap();
     let mut pac = PacIndex::default();
     assert_eq!(
@@ -28,8 +28,8 @@ fn go_prefix_fixture_borrowed_roundtrip_and_malformed() {
         assert_eq!(m.spans()[1][0], ABSENT);
         let (_, id) = pil_codec::pac::field(common, &c, member, &m, 1).unwrap();
         assert_eq!(id, [0, 0, 0, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, 42]);
-        let (_, event) = pil_codec::pac::field(common, &c, member, &m, 0).unwrap();
-        assert_eq!(event.len(), 16);
+        let (_, value) = pil_codec::pac::field(common, &c, member, &m, 0).unwrap();
+        assert_eq!(value.len(), 16);
     }
     for end in 0..raw.len() {
         assert!(
@@ -54,7 +54,7 @@ fn go_prefix_fixture_borrowed_roundtrip_and_malformed() {
 #[test]
 fn structural_pac_retains_full_bounds_and_binding_checks() {
     let raw = include_bytes!("fixtures/pac/packed.pac");
-    let d = Definition::from_cbor(include_bytes!("fixtures/pac/definition.cbor")).unwrap();
+    let d = Definition::from_pil(include_bytes!("fixtures/pac/definition.rx")).unwrap();
     let digest: [u8; 32] = raw[32..64].try_into().unwrap();
     let mut full = PacIndex::default();
     full.scan(&d, raw, &digest, &[SOURCE_EXTENSION], 64 << 20)

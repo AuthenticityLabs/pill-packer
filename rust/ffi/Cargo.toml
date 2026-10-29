@@ -6,11 +6,11 @@ rust-version = "1.88"
 license = "Apache-2.0"
 description = "Native C ABI for the Pill Packer codec"
 repository = "https://github.com/AuthenticityLabs/pill-packer"
-homepage = "https://trietrunk.com/PIL"
+homepage = "https://github.com/AuthenticityLabs/pill-packer"
 publish = false
 
 [lib]
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
-pil-codec = { package = "pill-packer", path = "..", features = ["json"] }
+pil-codec = { package = "pill-packer", path = "..", features = ["schema-runtime"] }

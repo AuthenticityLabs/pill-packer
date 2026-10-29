@@ -22,10 +22,6 @@
       "types": "./portable/layout.d.ts",
       "import": "./portable/layout.js"
     },
-    "./compression": {
-      "types": "./portable/compression.d.ts",
-      "import": "./portable/compression.js"
-    },
     "./gzip": {
       "types": "./portable/gzip.d.ts",
       "import": "./portable/gzip.js"
@@ -33,6 +29,11 @@
     "./columns": {
       "types": "./portable/columns.d.ts",
       "import": "./portable/columns.js"
+    },
+    "./object": "./portable/object.js",
+    "./pack": {
+      "types": "./portable/pack.d.ts",
+      "import": "./portable/pack.js"
     }
   },
   "files": [
@@ -45,7 +46,7 @@
   ],
   "scripts": {
     "build": "npm run build:portable && node ../scripts/build-wasm.mjs",
-    "test": "node --test test.mjs portable.test.mjs",
+    "test": "node --test test.mjs portable.test.mjs object.test.mjs pack.test.mjs",
     "prepack": "npm run build",
     "build:portable": "tsc -p tsconfig.json"
   },
@@ -57,7 +58,7 @@
     "url": "git+https://github.com/AuthenticityLabs/pill-packer.git",
     "directory": "npm"
   },
-  "homepage": "https://trietrunk.com/PIL",
+  "homepage": "https://github.com/AuthenticityLabs/pill-packer",
   "bugs": {
     "url": "https://github.com/AuthenticityLabs/pill-packer/issues"
   },

@@ -266,7 +266,7 @@ fn variable_array_matches_addendum_and_borrows_payload() {
 
 #[test]
 fn arrays_distinguish_absent_null_empty_and_empty_elements() {
-    for kind in [Scalar::U16, Scalar::String, Scalar::Bytes, Scalar::Cbor] {
+    for kind in [Scalar::U16, Scalar::String, Scalar::Bytes, Scalar::Object] {
         let def = single(Type::Array(kind));
         assert_wire(&def, &[Value::Absent], &[0]);
         assert_wire(&def, &[Value::Null], &[0x40]);
@@ -307,17 +307,27 @@ fn arrays_preserve_timestamp_units_and_uuid_bytes() {
 }
 
 #[test]
-fn cbor_array_allows_complex_values_but_not_null_elements() {
-    let def = single(Type::Array(Scalar::Cbor));
-    let items = [Value::Cbor(b"\xa1\x61x\xf6"), Value::Cbor(b"\x82\x01\x02")];
+fn object_array_allows_complex_values_but_not_null_elements() {
+    let def = single(Type::Array(Scalar::Object));
+    let items = [
+        Value::Object(&native(b"\xa1\x61x\xf6")),
+        Value::Object(&native(b"\x82\x01\x02")),
+    ];
     let bytes = encode(&def, &[Value::Array(Array::Items(&items))]).unwrap();
     assert_eq!(array_values(&decode_exact(&def, &bytes).unwrap()), items);
-    for invalid in [&b"\xf6"[..], &b"\x01\x02"[..], &b"\xa1"[..]] {
-        assert!(encode(&def, &[Value::Array(Array::Items(&[Value::Cbor(invalid)]))]).is_err());
+    let null = native(b"\xf6");
+    for invalid in [null.as_slice(), &b"\x01\x02"[..], &b"\xa1"[..]] {
+        assert!(
+            encode(
+                &def,
+                &[Value::Array(Array::Items(&[Value::Object(invalid)]))]
+            )
+            .is_err()
+        );
         let mut array = vec![1, 0];
         encode_extended(invalid.len() as u64, &mut array);
         array.extend_from_slice(invalid);
-        assert!(ArrayView::parse(Scalar::Cbor, &array).is_err());
+        assert!(ArrayView::parse(Scalar::Object, &array).is_err());
     }
 }
 
@@ -376,7 +386,7 @@ fn large_offsets_and_counts_switch_to_extended_forms() {
 }
 
 #[test]
-fn definition_cbor_preserves_order_dictionaries_and_types() {
+fn definition_pil_preserves_order_dictionaries_and_types() {
     let def = Definition::new(
         "users",
         42,
@@ -384,32 +394,32 @@ fn definition_cbor_preserves_order_dictionaries_and_types() {
             Field::new("z", Scalar::Uuid),
             Field::mapped("status", ["active", "pending"]),
             Field::new("a", Type::Array(Scalar::TimestampNs)),
-            Field::new("@fields", Scalar::Cbor),
+            Field::new("@fields", Scalar::Object),
         ],
     )
     .unwrap();
-    let bytes = def.to_cbor().unwrap();
-    let decoded = Definition::from_cbor(&bytes).unwrap();
+    let bytes = def.to_pil().unwrap();
+    let decoded = Definition::from_pil(&bytes).unwrap();
     assert_eq!(decoded, def);
     assert_eq!(decoded.identity(), "users");
     assert_eq!(decoded.version(), 42);
     assert_eq!(decoded.fields()[0].name, "z");
     assert_eq!(decoded.fields()[1].values[1], "pending");
-    assert_eq!(decoded.to_cbor().unwrap(), bytes);
+    assert_eq!(decoded.to_pil().unwrap(), bytes);
     let mut trailing = bytes;
     trailing.push(0);
-    assert!(Definition::from_cbor(&trailing).is_err());
+    assert!(Definition::from_pil(&trailing).is_err());
 }
 
 #[test]
 fn invalid_definitions_fail_before_frames_are_decoded() {
+    assert!(Definition::new("intrinsic",0,vec![Field::new("@event_id",Scalar::Bytes),Field::new("@time",Scalar::TimestampMs)]).is_ok());
     assert!(Definition::new("empty", 0, vec![]).is_err());
     assert!(Definition::new("", 0, vec![Field::new("a", Scalar::U8)]).is_err());
     for fields in [
         vec![Field::new("x", Scalar::U8), Field::new("x", Scalar::U8)],
         vec![Field::new("", Scalar::U8)],
         vec![Field::mapped("x", ["a", "a"])],
-        vec![Field::new("@custom", Scalar::U8)],
         vec![Field::new("@fields", Scalar::String)],
         vec![Field {
             name: "x".into(),
@@ -420,26 +430,41 @@ fn invalid_definitions_fail_before_frames_are_decoded() {
         assert!(Definition::new("bad", 0, fields).is_err());
     }
     assert!("ARRAY<ARRAY<U16>>".parse::<Type>().is_err());
-    assert!("OBJECT".parse::<Type>().is_err());
-    assert!(Definition::from_cbor(b"\xa2\x63pil\x00\x63pil\x00").is_err());
+    assert_eq!(
+        "OBJECT".parse::<Type>().unwrap(),
+        Type::Scalar(Scalar::Object)
+    );
+    assert!("CBOR".parse::<Type>().is_err());
+    assert!("ARRAY<CBOR>".parse::<Type>().is_err());
+    assert!(Definition::from_pil(b"\xa2\x63pil\x00\x63pil\x00").is_err());
 }
 
 #[test]
 fn dynamic_fields_require_unique_text_keys_without_collisions() {
     let def = definition(vec![
         Field::new("id", Scalar::U8),
-        Field::new("@fields", Scalar::Cbor),
+        Field::new("@fields", Scalar::Object),
     ]);
     assert_wire(&def, &[Value::Absent, Value::Absent], &[0]);
     assert_wire(
         &def,
-        &[Value::U8(1), Value::Cbor(b"\xa0")],
-        &[0xb0, 1, 1, 0, 0xa0],
+        &[Value::U8(1), Value::Object(&native(b"\xa0"))],
+        &[
+            &[0xb0, 1][..],
+            &(native(b"\xa0").len() as u16).to_le_bytes(),
+            &native(b"\xa0"),
+        ]
+        .concat(),
     );
     assert_wire(
         &def,
-        &[Value::Absent, Value::Cbor(b"\xa1\x61x\x01")],
-        b"\x30\x04\x00\xa1\x61x\x01",
+        &[Value::Absent, Value::Object(&native(b"\xa1\x61x\x01"))],
+        &[
+            &[0x30][..],
+            &(native(b"\xa1\x61x\x01").len() as u16).to_le_bytes(),
+            &native(b"\xa1\x61x\x01"),
+        ]
+        .concat(),
     );
     assert!(encode(&def, &[Value::Absent, Value::Null]).is_err());
     assert!(decode_exact(&def, &[0x10]).is_err());
@@ -451,7 +476,7 @@ fn dynamic_fields_require_unique_text_keys_without_collisions() {
         &b"\xa1\x62@x\x01"[..],
         &b"\xa2\x61x\x01\x61x\x02"[..],
     ] {
-        assert!(encode(&def, &[Value::Absent, Value::Cbor(invalid)]).is_err());
+        assert!(encode(&def, &[Value::Absent, Value::Object(invalid)]).is_err());
         let mut wire = vec![0x30];
         encode_extended(invalid.len() as u64, &mut wire);
         wire.extend_from_slice(invalid);
@@ -460,11 +485,20 @@ fn dynamic_fields_require_unique_text_keys_without_collisions() {
 }
 
 #[test]
-fn cbor_fields_require_exactly_one_item_and_enforce_depth_limit() {
-    let def = single(Scalar::Cbor);
-    assert_wire(&def, &[Value::Cbor(b"\xf6")], b"\xc0\x01\x00\xf6");
+fn object_fields_require_exactly_one_item_and_enforce_depth_limit() {
+    let def = single(Scalar::Object);
+    assert_wire(
+        &def,
+        &[Value::Object(&native(b"\xf6"))],
+        &[
+            &[0xc0][..],
+            &(native(b"\xf6").len() as u16).to_le_bytes(),
+            &native(b"\xf6"),
+        ]
+        .concat(),
+    );
     for payload in [&b""[..], &b"\x01\x02"[..], &b"\xff"[..], &b"\xa1"[..]] {
-        assert!(encode(&def, &[Value::Cbor(payload)]).is_err());
+        assert!(encode(&def, &[Value::Object(payload)]).is_err());
         let mut bytes = vec![0xc0];
         encode_extended(payload.len() as u64, &mut bytes);
         bytes.extend_from_slice(payload);
@@ -472,7 +506,7 @@ fn cbor_fields_require_exactly_one_item_and_enforce_depth_limit() {
     }
     let mut deep = vec![0x81; 65];
     deep.push(1);
-    assert!(encode(&def, &[Value::Cbor(&deep)]).is_err());
+    assert!(encode(&def, &[Value::Object(&deep)]).is_err());
 }
 
 #[test]
@@ -557,4 +591,20 @@ fn concatenated_frames_preserve_absence_and_null() {
     assert_eq!(broken.next().unwrap().unwrap().values(), &[Value::Null]);
     assert!(matches!(broken.next().unwrap(), Err(Error::Incomplete)));
     assert!(broken.next().is_none());
+}
+
+fn native(raw: &[u8]) -> Vec<u8> {
+    let value: ciborium::Value = ciborium::from_reader(raw).unwrap();
+    pil_codec::object::encode_value(&value).unwrap()
+}
+
+#[test]
+fn u24_exact_three_bytes_and_overflow() {
+ let def=single(Scalar::U24);
+ for n in [0,1,255,256,65535,65536,0xffffff] {
+  let b=n as u32; let expected=[0x80,b as u8,(b>>8) as u8,(b>>16) as u8];
+  assert_wire(&def,&[Value::U24(b)],&expected);
+ }
+ assert!(encode(&def,&[Value::U24(0x1000000)]).is_err());
+ for raw in [&[0x80,0,0][..],&[0x80,0,0,0,0][..]] { assert!(decode_exact(&def,raw).is_err()); }
 }

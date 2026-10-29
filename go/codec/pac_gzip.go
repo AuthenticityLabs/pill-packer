@@ -27,10 +27,15 @@ func SealGzip(raw []byte) (*SealedGzip, error) {
 	return SealGzipLevel(raw, gzip.BestSpeed)
 }
 
+var bestSpeedGzipWriters = sync.Pool{New: func() any {
+	w, _ := gzip.NewWriterLevel(io.Discard, gzip.BestSpeed)
+	return w
+}}
+
 // Each pool retains its writer's level across Reset. Allocate writers lazily;
 // policies that never use a level incur no compressor allocation for it.
 var pacGzipWriters = func() (p [10]*sync.Pool) {
-	p[gzip.BestSpeed] = &fastGzipWriters
+	p[gzip.BestSpeed] = &bestSpeedGzipWriters
 	for level := 2; level <= gzip.BestCompression; level++ {
 		p[level] = &sync.Pool{New: func() any {
 			w, _ := gzip.NewWriterLevel(io.Discard, level)

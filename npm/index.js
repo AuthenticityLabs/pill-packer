@@ -27,6 +27,15 @@ export class Codec {
     const n = this.check(this.api.json_definition());
     return new Uint8Array(this.api.memory.buffer, this.api.document_ptr(), n).slice();
   }
+  encodeJSON(id, text) {
+    this.upload(typeof text === 'string' ? new TextEncoder().encode(text) : text);
+    const n=this.check(this.api.schema_json(id,0));
+    return new Uint8Array(this.api.memory.buffer,this.api.document_ptr(),n).slice();
+  }
+  decodeJSON(id, bytes) {
+    this.upload(bytes);const n=this.check(this.api.schema_json(id,1));
+    return new TextDecoder().decode(new Uint8Array(this.api.memory.buffer,this.api.document_ptr(),n));
+  }
   scan(id, offset, length) { return this.check(this.api.scan(id, offset, length)); }
   scanStructural(id, offset, length) { return this.check(this.api.scan_structural(id, offset, length)); }
   verifyCRC32C(bytes, expected) {
@@ -48,6 +57,7 @@ export class Codec {
     const n = this.check(this.api.inflate(length));
     return new Uint8Array(this.api.memory.buffer, this.api.inflated_ptr(), n).slice();
   }
+  deflate(bytes,level=1) {this.upload(bytes);const n=this.check(this.api.deflate(level));return new Uint8Array(this.api.memory.buffer,this.api.inflated_ptr(),n).slice();}
   release(id) { this.api.release(id); }
 }
 

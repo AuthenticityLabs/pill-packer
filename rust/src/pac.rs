@@ -77,7 +77,8 @@ impl PacIndex {
         let size = number(8)?;
         let header = number(16)?;
         let count = number(24)?;
-        if flags > 1
+        if flags & !5 != 0
+            || flags & 4 == 0
             || size > maximum
             || size >= NULL as usize
             || header < HEADER_SIZE
@@ -117,28 +118,95 @@ impl PacIndex {
                 std::str::from_utf8(value).map_err(|_| Error::Invalid("PAC source UTF-8"))?;
             }
         }
-        let length = usize::try_from(uint::read(h, &mut at)?).map_err(|_| Error::Overflow)?;
-        if length != header - at || (length > 0) != (flags == 1) {
-            return Err(Error::Invalid("PAC common bounds"));
+        let layout = uint::take(h, &mut at, 5)?;
+        let address_width = layout[0] as usize;
+        let record_width = u32::from_le_bytes(layout[1..5].try_into().unwrap()) as usize;
+        if ![0, 2, 3, 4].contains(&address_width) {
+            return Err(Error::Invalid("PAC address width"));
         }
-        self.common = [at as u32, header as u32];
+        let names = usize::try_from(uint::read(h, &mut at)?).map_err(|_| Error::Overflow)?;
+        if names > (header - at) / 4 {
+            return Err(Error::Invalid("PAC header count"));
+        }
+        let mut previous: &[u8] = &[];
+        for _ in 0..names {
+            let n = usize::try_from(uint::read(h, &mut at)?).map_err(|_| Error::Overflow)?;
+            let name = uint::take(h, &mut at, n)?;
+            if name.is_empty() || name <= previous {
+                return Err(Error::Invalid("PAC header name/order"));
+            }
+            std::str::from_utf8(name).map_err(|_| Error::Invalid("PAC header UTF-8"))?;
+            previous = name;
+            let n = usize::try_from(uint::read(h, &mut at)?).map_err(|_| Error::Overflow)?;
+            uint::take(h, &mut at, n)?;
+        }
+        let length = usize::try_from(uint::read(h, &mut at)?).map_err(|_| Error::Overflow)?;
+        let common_start = at;
+        uint::take(h, &mut at, length)?;
+        if (length > 0) != (flags & 1 != 0) || count.checked_mul(address_width) != Some(header - at)
+        {
+            return Err(Error::Invalid("PAC directory/common bounds"));
+        }
+        let directory = &h[at..header];
+        self.common = [common_start as u32, (common_start + length) as u32];
         if length > 0
-            && self
-                .prefix
-                .scan_mode_for_pac(definition, &input[at..header], maximum, validate)?
-                != length
+            && self.prefix.scan_mode_for_pac(
+                definition,
+                &input[common_start..common_start + length],
+                maximum,
+                validate,
+            )? != length
         {
             return Err(Error::Invalid("PAC common frame"));
         }
+        if record_width > 0 && count.checked_mul(record_width) != Some(size - header) {
+            return Err(Error::Invalid("PAC fixed extent"));
+        }
+        let offset = |i: usize| -> usize {
+            let mut n = 0usize;
+            for j in (0..address_width).rev() {
+                n = (n << 8) | directory[i * address_width + j] as usize;
+            }
+            n
+        };
         let mask = definition.fields().len().div_ceil(4);
         if mask == 0 || count > u32::MAX as usize || count > (size - header) / mask {
             return Err(Error::Invalid("PAC count"));
         }
         at = header;
-        for _ in 0..count {
+        for ordinal in 0..count {
+            let expected = if record_width > 0 {
+                Some(record_width)
+            } else if address_width > 0 {
+                let start = offset(ordinal);
+                let end = if ordinal + 1 < count {
+                    offset(ordinal + 1)
+                } else {
+                    size - header
+                };
+                if start != at - header || end <= start || end > size - header {
+                    return Err(Error::Invalid("PAC directory offset"));
+                }
+                Some(end - start)
+            } else {
+                None
+            };
+            if record_width > 0 && address_width > 0 && offset(ordinal) != ordinal * record_width {
+                return Err(Error::Invalid("PAC redundant directory"));
+            }
+            if !validate {
+                if let Some(n) = expected {
+                    self.members.push([at as u32, (at + n) as u32]);
+                    at += n;
+                    continue;
+                }
+            }
             let n =
                 self.member
                     .scan_mode_for_pac(definition, &input[at..size], maximum, validate)?;
+            if expected.is_some_and(|size| size != n) {
+                return Err(Error::Invalid("PAC member extent"));
+            }
             if validate && length > 0 {
                 for (c, m) in self.prefix.spans().iter().zip(self.member.spans()) {
                     if c[0] != ABSENT && m[0] != ABSENT {

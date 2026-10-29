@@ -1,4 +1,4 @@
-import { cbor } from "./cbor.ts";
+import { decodeObject } from "./object.ts";
 export type PILField = { name: string; type: string; values?: string[] };
 export type PILDefinition = {
   pil: number;
@@ -14,6 +14,7 @@ const widths: Record<string, number> = {
   U8: 1,
   I16: 2,
   U16: 2,
+  U24: 3,
   REF16: 2,
   I32: 4,
   U32: 4,
@@ -27,7 +28,18 @@ const widths: Record<string, number> = {
   TIMESTAMP_NS: 8,
 };
 export const textDecoder = new TextDecoder("utf-8", { fatal: true });
+export function fixedStringCapacity(type: string): number | undefined {
+  const match = /^STRING\(([1-9][0-9]*)\)$/.exec(type);
+  if (!match) return undefined;
+  const capacity = Number(match[1]);
+  if (!Number.isSafeInteger(capacity) || capacity > 0xffffffff) throw Error("Invalid STRING byte capacity");
+  return capacity;
+}
+export function stringLengthWidth(capacity: number): number { return capacity <= 255 ? 1 : capacity <= 65535 ? 2 : 4; }
 export function width(field: PILField): number {
+ if(field.type.includes("CBOR"))throw Error("CBOR is an ingress format, not a PIL field type");
+  const capacity = fixedStringCapacity(field.type);
+  if (capacity !== undefined) return capacity + stringLengthWidth(capacity);
   const n = field.values?.length ?? 0;
   return n
     ? n <= 256
@@ -70,7 +82,7 @@ function selectors(def: PILDefinition): Uint8Array {
 }
 export type Span = { state: number; start: number; end: number };
 // The WASM validator has already checked this frame. Resolve just one position,
-// without allocating a field/value array for each retained event.
+// without allocating a field/value array for each retained record.
 export function span(
   bytes: Uint8Array,
   def: PILDefinition,
@@ -132,6 +144,7 @@ export function integer(
   if (size === 1) return signed ? view.getInt8(0) : view.getUint8(0);
   if (size === 2)
     return signed ? view.getInt16(0, true) : view.getUint16(0, true);
+  if (size === 3) { const n = view.getUint16(0,true) + view.getUint8(2)*65536; return signed && n >= 0x800000 ? n - 0x1000000 : n; }
   if (size === 4)
     return signed ? view.getInt32(0, true) : view.getUint32(0, true);
   const n = signed ? view.getBigInt64(0, true) : view.getBigUint64(0, true);
@@ -160,7 +173,17 @@ export function read(
 }
 export function scalar(value: Uint8Array, type: string): unknown {
   const view = new DataView(value.buffer, value.byteOffset, value.length);
-  if (type === "CBOR") return cbor(value);
+  const capacity = fixedStringCapacity(type);
+  if (capacity !== undefined) {
+    const prefix = stringLengthWidth(capacity);
+    if (value.length !== capacity + prefix) throw Error("Wrong fixed STRING width");
+    const length = prefix === 1 ? view.getUint8(0) : prefix === 2 ? view.getUint16(0, true) : view.getUint32(0, true);
+    if (length > capacity) throw Error("STRING length exceeds capacity");
+    for (let i = prefix + length; i < value.length; i++) if (value[i]) throw Error("Nonzero STRING padding");
+    return textDecoder.decode(value.subarray(prefix, prefix + length));
+  }
+
+  if (type === "OBJECT") return decodeObject(value);
   if (type === "STRING") return textDecoder.decode(value);
   if (type === "UUID" || type === "BYTES") return value;
   if (type === "BOOL") return value[0] === 1;
@@ -168,7 +191,7 @@ export function scalar(value: Uint8Array, type: string): unknown {
   if (type === "F64") return view.getFloat64(0, true);
   if (type.startsWith("ARRAY<")) {
     const element = type.slice(6, -1);
-    const w = widths[element] ?? 0;
+    const w = width({name: "", type: element});
     const [count, offset] = extended(view, 0);
     if (w) {
       return Array.from({ length: count }, (_, i) =>

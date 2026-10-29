@@ -1,4 +1,4 @@
-use crate::{AdaptiveIntegers, Error, Scalar, Type, adaptive::IntegerField, cbor};
+use crate::{AdaptiveIntegers, Error, Scalar, Type, adaptive::IntegerField};
 use ciborium::Value;
 use std::collections::HashSet;
 
@@ -40,9 +40,8 @@ impl Field {
     }
 }
 
-//TODO: Explore compiling CDDL plus PIL layout conventions/annotations into a
-// definition-specific WASM encoder/decoder. Preserve wire format and validation;
-// benchmark against the generalized codec to establish any performance benefit.
+// CDDL schemas compile into the shared runtime layout in schema.rs. Keep the
+// same compiled representation for Rust, Go, and WASM so validation stays equal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
     identity: String,
@@ -72,11 +71,10 @@ impl Definition {
                     "field names must be nonempty and unique".into(),
                 ));
             }
-            if field.name.starts_with('@')
-                && (field.name != "@fields" || field.kind != Scalar::Cbor.into())
+            if field.name == "@fields" && !matches!(field.kind, Type::Scalar(Scalar::Object))
             {
                 return Err(Error::Definition(
-                    "only @fields:CBOR is a supported reserved field".into(),
+                    "only @fields:OBJECT is a supported reserved field".into(),
                 ));
             }
             if !field.values.is_empty() && field.kind != Scalar::String.into() {
@@ -138,7 +136,7 @@ impl Definition {
         &self.fields
     }
 
-    pub fn to_cbor(&self) -> Result<Vec<u8>, Error> {
+    pub fn to_pil(&self) -> Result<Vec<u8>, Error> {
         let fields = self
             .fields
             .iter()
@@ -179,14 +177,11 @@ impl Definition {
             ))
         }
         let value = Value::Map(entries);
-        let mut bytes = Vec::new();
-        ciborium::ser::into_writer(&value, &mut bytes)
-            .map_err(|_| Error::Invalid("cannot encode Definition CBOR"))?;
-        Ok(bytes)
+        crate::object::encode_value(&value)
     }
 
-    pub fn from_cbor(bytes: &[u8]) -> Result<Self, Error> {
-        let value = cbor::parse(bytes)?;
+    pub fn from_pil(bytes: &[u8]) -> Result<Self, Error> {
+        let value = crate::object::decode_value(bytes)?;
         let map = map(&value)?;
         let mode = match get(map, "adaptive_integers") {
             Some(v) => AdaptiveIntegers::parse(text(v)?)?,
@@ -234,7 +229,7 @@ fn map(value: &Value) -> Result<&[(Value, Value)], Error> {
             }
             Ok(entries)
         }
-        _ => Err(Error::Definition("expected CBOR map".into())),
+        _ => Err(Error::Definition("expected Definition map".into())),
     }
 }
 

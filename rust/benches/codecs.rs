@@ -332,7 +332,7 @@ fn main() {
     let maximum = flag("--max").unwrap_or("1000000").parse::<usize>().unwrap();
     let only = flag("--shape");
     println!(
-        "shape,reference_bits,events,operation,codec,encoded_bytes,median_ns_per_event,min_ns,max_ns,samples_ns"
+        "shape,reference_bits,records,operation,codec,encoded_bytes,median_ns_per_record,min_ns,max_ns,samples_ns"
     );
     for (shape, width, present) in [
         ("dense16", 16, 16),
@@ -343,7 +343,7 @@ fn main() {
             continue;
         }
         eprintln!(
-            "Preparing {shape}: {maximum} events, {bits}-bit reference; definitions outside timings"
+            "Preparing {shape}: {maximum} records, {bits}-bit reference; definitions outside timings"
         );
         let d = definition(width, bits);
         let records = records(&d, present, maximum);
@@ -381,7 +381,7 @@ fn main() {
             sizes.push(maximum);
         }
         for count in sizes {
-            eprintln!("Measuring {shape}, {count} events");
+            eprintln!("Measuring {shape}, {count} records");
             let times = measure(
                 |repeats| {
                     for _ in 0..repeats {

@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	pillpacker "github.com/AuthenticityLabs/pill-packer/go"
 	"github.com/fxamacker/cbor/v2"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -30,6 +32,7 @@ type IdentityProfile struct {
 	Validate func(Value) error
 }
 type Layout struct {
+	schema     *pillpacker.Definition
 	Definition Definition
 	Bytes      []byte
 	Digest     [32]byte
@@ -42,19 +45,43 @@ var order = binary.LittleEndian
 var encoder, _ = cbor.CoreDetEncOptions().EncMode()
 var decoder, _ = (cbor.DecOptions{DupMapKey: cbor.DupMapKeyEnforcedAPF, IndefLength: cbor.IndefLengthForbidden, TagsMd: cbor.TagsForbidden, MaxNestedLevels: 32, MaxArrayElements: 65536, MaxMapPairs: 65536}).DecMode()
 
+func FixedStringCapacity(kind string) (int, bool) {
+	if !strings.HasPrefix(kind, "STRING(") || !strings.HasSuffix(kind, ")") {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(kind[7:len(kind)-1], 10, 32)
+	return int(n), err == nil && n > 0
+}
+func StringLengthWidth(capacity int) int {
+	if capacity <= 255 {
+		return 1
+	}
+	if capacity <= 65535 {
+		return 2
+	}
+	return 4
+}
 func Width(kind string) (int, error) {
+	if n, ok := FixedStringCapacity(kind); ok {
+		if n > MaxFrame-4 {
+			return 0, fmt.Errorf("STRING slot exceeds frame limit")
+		}
+		return n + StringLengthWidth(n), nil
+	}
 	switch kind {
 	case "BOOL", "I8", "U8":
 		return 1, nil
 	case "I16", "U16", "REF16":
 		return 2, nil
+	case "U24":
+		return 3, nil
 	case "I32", "U32", "F32":
 		return 4, nil
 	case "I64", "U64", "F64", "TIMESTAMP_MS", "TIMESTAMP_US", "TIMESTAMP_NS":
 		return 8, nil
 	case "UUID":
 		return 16, nil
-	case "STRING", "BYTES", "CBOR":
+	case "STRING", "BYTES", "OBJECT":
 		return 0, nil
 	}
 	if strings.HasPrefix(kind, "ARRAY<") && strings.HasSuffix(kind, ">") {
@@ -74,7 +101,7 @@ func Parse(raw []byte, identity IdentityProfile) (*Layout, error) {
 		return nil, fmt.Errorf("definition too large")
 	}
 	var d Definition
-	if err := decoder.Unmarshal(raw, &d); err != nil {
+	if err := UnmarshalObject(raw, &d); err != nil {
 		return nil, err
 	}
 	adaptive := d.AdaptiveIntegers != "" && d.AdaptiveIntegers != "none"
@@ -94,7 +121,7 @@ func Parse(raw []byte, identity IdentityProfile) (*Layout, error) {
 			return nil, fmt.Errorf("duplicate field %q", f.Name)
 		}
 		byName[f.Name] = i
-		if strings.HasPrefix(f.Name, "@") && (f.Name != "@fields" || f.Type != "CBOR") {
+		if f.Name == "@fields" && f.Type != "OBJECT" {
 			return nil, fmt.Errorf("unsupported reserved field")
 		}
 		w, err := Width(f.Type)
@@ -127,19 +154,29 @@ func Parse(raw []byte, identity IdentityProfile) (*Layout, error) {
 	}
 
 	if identity.Primary < -1 || identity.Primary >= len(d.Fields) {
-		return nil, fmt.Errorf("invalid compression identity")
+		return nil, fmt.Errorf("invalid primary field index")
 	}
 	var err error
 	l.integers, err = compileIntegers(l)
 	if err != nil {
 		return nil, err
 	}
+	var annotations map[string]RawObject
+	if err := UnmarshalObject(raw, &annotations); err != nil {
+		return nil, err
+	}
+	if _, ok := annotations["cddl"]; ok {
+		l.schema, err = pillpacker.FromPIL(raw)
+		if err != nil {
+			return nil, err
+		}
+	}
 	l.Bytes = append([]byte(nil), raw...)
 	l.Digest = sha256.Sum256(raw)
 	return l, nil
 }
 func Compile(d Definition) (*Layout, error) {
-	raw, err := encoder.Marshal(d)
+	raw, err := MarshalObject(d)
 	if err != nil {
 		return nil, err
 	}

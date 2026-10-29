@@ -13,16 +13,16 @@ func TestRustDefinitionAndBorrowedFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	encoded, err := d.CBOR()
+	encoded, err := d.PIL()
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := FromCBOR(encoded)
+	next, err := FromPIL(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer next.Close()
-	forwarded, _ := next.CBOR()
+	forwarded, _ := next.PIL()
 	if !bytes.Equal(encoded, forwarded) || !bytes.Contains(encoded, []byte("vendor")) {
 		t.Fatal("lost annotation")
 	}

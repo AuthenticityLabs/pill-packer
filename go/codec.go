@@ -42,7 +42,7 @@ func from(bytes []byte, format C.uint8_t) (*Definition, error) {
 	runtime.SetFinalizer(d, (*Definition).Close)
 	return d, nil
 }
-func FromCBOR(bytes []byte) (*Definition, error) { return from(bytes, 0) }
+func FromPIL(bytes []byte) (*Definition, error)  { return from(bytes, 0) }
 func FromJSON(bytes []byte) (*Definition, error) { return from(bytes, 1) }
 
 func (d *Definition) failure(result C.int64_t) error {
@@ -54,9 +54,9 @@ func (d *Definition) failure(result C.int64_t) error {
 	return errors.New(string(unsafe.Slice((*byte)(unsafe.Pointer(ptr)), int(size))))
 }
 
-// CBOR copies the complete document, preserving opaque annotations and exact
-// original bytes for a CBOR import. Call once during registration/forwarding.
-func (d *Definition) CBOR() ([]byte, error) {
+// PIL copies the complete document, preserving opaque annotations and exact
+// original bytes for a PIL import. Call once during registration/forwarding.
+func (d *Definition) PIL() ([]byte, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.ctx == nil {
@@ -69,8 +69,8 @@ func (d *Definition) CBOR() ([]byte, error) {
 	return out, nil
 }
 
-// Scan returns the first frame's byte length. It validates frame structure;
-// profile/business validation is separate. maximum bounds the decoded frame.
+// Scan returns the first frame's byte length. It validates frame structure and any registered nested CDDL schema;
+// application profile validation is separate. maximum bounds the decoded frame.
 func (d *Definition) Scan(bytes []byte, maximum int) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -97,4 +97,27 @@ func (d *Definition) Close() {
 		d.ctx = nil
 	}
 	runtime.SetFinalizer(d, nil)
+}
+
+// EncodeJSON validates a schema-defined object and encodes its nested PIL frames.
+func (d *Definition) EncodeJSON(bytes []byte) ([]byte, error) { return d.json(bytes, 0) }
+
+// DecodeJSON validates the complete record, including nested schema constraints.
+func (d *Definition) DecodeJSON(bytes []byte) ([]byte, error) { return d.json(bytes, 1) }
+func (d *Definition) json(bytes []byte, mode C.uint8_t) ([]byte, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.ctx == nil {
+		return nil, ErrClosed
+	}
+	result := C.pp_json(d.ctx, pointer(bytes), C.size_t(len(bytes)), mode)
+	runtime.KeepAlive(bytes)
+	if result < 0 {
+		return nil, d.failure(result)
+	}
+	var size C.size_t
+	ptr := C.pp_output(d.ctx, &size)
+	out := append([]byte(nil), unsafe.Slice((*byte)(unsafe.Pointer(ptr)), int(size))...)
+	runtime.KeepAlive(d)
+	return out, nil
 }

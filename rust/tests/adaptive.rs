@@ -8,14 +8,14 @@ fn golden_exhaustive_signed_unsigned_and_streams() {
         "test",
         1,
         vec![
-            Field::new("event_id", S::Uuid),
+            Field::new("id", S::Uuid),
             Field::new("u", S::U16),
             Field::new("i", S::I16),
         ],
     )
     .unwrap()
     .with_adaptive_integers(A::From16);
-    assert_eq!(Definition::from_cbor(&d.to_cbor().unwrap()).unwrap(), d);
+    assert_eq!(Definition::from_pil(&d.to_pil().unwrap()).unwrap(), d);
     let mut index = FrameIndex::default();
     for u in 0..=u16::MAX {
         let values = [V::Absent, V::U16(u), V::I16(u as i16)];
@@ -98,7 +98,7 @@ fn reject_noncanonical_and_bad_widths() {
     let d = Definition::new(
         "test",
         1,
-        vec![Field::new("event_id", S::Uuid), Field::new("u", S::U16)],
+        vec![Field::new("id", S::Uuid), Field::new("u", S::U16)],
     )
     .unwrap()
     .with_adaptive_integers(A::From16);

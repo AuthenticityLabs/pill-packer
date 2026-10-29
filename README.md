@@ -1,12 +1,86 @@
 # Pill Packer
 
-Portable codecs for **PIL (Positional Interchange Layout)** and **PIL PACs**.
+Portable codecs for **PIL (Positional Interchange Layout)** and **PAC (Packed Array Container)**.
 Encode typed values by field position, distinguish absent fields from nulls,
 and read packed records without expanding every field into an object.
 
-[Format & Specification](https://trietrunk.com/PIL)
+[Format & Specification](https://github.com/AuthenticityLabs/pill-packer/blob/main/README.md)
 
-## Libraries
+## Pack API
+
+Pill Packer owns portable encoding, packing, compression, and validation.
+Applications own grouping, storage, retention, and routing. The Go codec and
+`pill-packer/pack` JavaScript module implement the byte-oriented pack API;
+Rust/WASM provides validation, scanning, and compression primitives. This is
+not yet a uniform high-level API across all bindings.
+
+| Operation | Behavior |
+| --- | --- |
+| Define | Prepare a PIL `.rx` Definition for reuse |
+| Fill | Compose a validated PIL record from ordered fields |
+| Pack | Group records, optionally factor common fields, and choose addressing |
+| Open / Get | Open a container and recover a standalone member by ordinal or exact member offset |
+| Compress / Decompress | Explicit whole-PAC gzip wrapper and restoration |
+| Unpack | Restore standalone records and named application headers |
+| Push / Pop | Rebuild a pack with a tail record added or removed |
+
+Named headers carry application-supplied byte values. The codec interprets only
+its structural controls. Compression is explicit; returning an uncompressed pack
+when compression expands it requires `onlyIfSmaller`. Whole-pack compression
+must be undone before indexed member access.
+
+Three addressing forms are supported by the current format:
+
+- No directory: member boundaries are found by scanning self-delimiting frames.
+- Embedded directory: one member-relative start offset per record, with a
+  caller-selected and checked width of 2, 3, or 4 bytes.
+- Fixed width: the pack declares a verified encoded record width and member
+  count. Every member must actually have that width after common factoring.
+
+Fixed-capacity strings do not by themselves imply fixed-width records: omitted
+fields and other variable fields still affect encoded lengths. Caller-provided
+offsets are checked against the actual packed members. A directory occupies
+`recordCount × addressBytes`; it is additional storage, not a free replacement
+for an application's index. Application-managed external offsets remain possible
+without requiring the generic library to own a sidecar file.
+
+JavaScript example (given a prepared `codec`, `.rx` bytes, and PIL records):
+
+```js
+import {define, pack, compress, decompress} from 'pill-packer/pack';
+
+const definition = await define(rxBytes, codec);
+const unpacked = pack(definition, records, {
+  index: {addressBytes: 4},
+  packing: {commonValues: true},
+  headers: {source: new TextEncoder().encode('example')},
+});
+const packed = compress(unpacked, {algorithm: 'gzip', level: 1});
+const restored = await decompress(packed);
+const first = restored.get(0);
+```
+
+`member()` borrows bytes from a JavaScript UPack; `get()` returns an owned record
+with inherited common fields restored. An unindexed JavaScript lookup scans
+preceding members. Go's parsed PAC and Rust's validating `PacIndex` expose member
+tables built during parsing; do not describe every binding's open as zero-scan.
+Tail changes rebuild/revalidate the pack and may change factoring and offsets.
+Published packs referenced by application indexes must remain immutable.
+
+## Verification and Remaining Work
+
+Pack tests live in `npm/pack.test.mjs`, `go/codec/pack_test.go`, and
+`rust/tests/pac.rs`; cross-binding fixtures cover shared representations.
+Measure parsing, validation, member access, restoration, and compression
+separately, including copies and directory bytes. Historical application
+benchmarks do not prove that one addressing mode is universally faster.
+
+Remaining work includes high-level API parity across bindings, expansion of the
+supported CDDL subset, and application integration measurements. Definition-specific
+compiled WASM codecs remain future work: accept CDDL and generate specialized
+codecs, then compare them with the general interpreter before adopting them.
+
+## Current Libraries
 
 | Library | Location | Available APIs |
 | --- | --- | --- |
@@ -16,28 +90,103 @@ and read packed records without expanding every field into an object.
 | Go Codec | `go/codec/` | PIL encode/decode and streaming writes, PAC factoring/writing/reading, compression and column transforms |
 
 Definitions describe ordered fields, binary types, and string dictionaries.
-Their CBOR structure is described by [CDDL](https://github.com/AuthenticityLabs/pill-packer/blob/main/schemas/definition.cddl); runtime
+They are stored as binary PIL files with the `.rx` extension, including their
+structured CDDL schema annotations. The fixed bootstrap is published as
+[`schemas/pil.rx`](schemas/pil.rx). Their structure is described by [CDDL](https://github.com/AuthenticityLabs/pill-packer/blob/main/schemas/definition.cddl); runtime
 validators enforce semantic rules. The document API preserves unknown annotations.
 Applications own routing, storage, delivery, and consistency policies.
 
 This is an early implementation. Packages are not yet published to registries.
-The Go codec is a portable Go implementation; it is not a Rust FFI wrapper.
+The Go scalar codec is implemented in Go; its compiled nested-schema support
+uses the shared Rust runtime through the native bindings.
 Rust, Go and JavaScript APIs do not yet have full feature parity. Cross-language
-fixtures verify their shared wire formats. Arbitrary CDDL-to-PIL compilation is
-not supported.
+fixtures verify their shared wire formats. The optional Rust `schema` feature
+compiles a supported CDDL subset into PIL layouts and a JSON-editable schema.
+Unsupported constructs fail explicitly; full CDDL support is not claimed.
 
 Pill Packer owns PIL field layouts, adaptive integers, arrays, PAC common-value
 factoring, PAC headers, gzip compression/decompression, numeric base residuals,
-and byte shuffling. Applications supply schemas and compression settings. Sealing
-schedules, storage placement, aggregation semantics, retention, replication and
-cache eviction remain application responsibilities. Numeric column transforms
-are reusable codec primitives; using them does not make an application-specific
-container a PIL PAC.
+and byte shuffling. Applications supply schemas and choose whether and when to
+compress. Version zero defines gzip as its only PAC compression codec; callers
+can select gzip effort through the compression API. Adding other PAC codecs
+requires a versioned discriminator and implementations in each binding. Sealing
+schedules, storage placement, aggregation, retention, replication, and eviction
+remain application responsibilities. Numeric column transforms are reusable
+codec primitives, while their use in an enclosing container is defined by that
+container's own format.
 
 The Go codec import is `github.com/AuthenticityLabs/pill-packer/go/codec`.
 JavaScript helpers are exported as `pill-packer/layout`, `pill-packer/pac`,
-`pill-packer/compression`, `pill-packer/gzip`, `pill-packer/columns` and
+`pill-packer/gzip`, `pill-packer/columns`, `pill-packer/object`, `pill-packer/pack`, and
 `pill-packer/cbor`. The package root exposes the Rust/WASM reader.
+
+## Command-Line Reader
+
+Build and install the `rx` executable:
+
+```sh
+cargo install --path rust --locked --features cli --bin rx
+rx read definition.rx records.pil
+rx read definition.rx records.pac
+rx read definition.rx records.pac.gz --pretty
+rx read definition.rx
+rx definition.rx --pretty
+rx write definition.json definition.rx
+rx bootstrap pil.rx
+```
+
+`.rx` names a definition document; `.pil` names a record stream and `.pac`
+names a record pack. Every `.rx` document, including the structured CDDL schema
+inside its `cddl` annotation, is encoded entirely in PIL. JSON and `.cddl` files
+are editable authoring inputs. There is no JSON or CDDL text envelope in `.rx`.
+
+`schemas/pil.rx` describes the fixed seven-field `pil/value` layout used to encode
+all definition documents, including itself. Readers have this one small layout
+built in, so no network lookup or infinite chain of definitions is required.
+`rx bootstrap pil.rx` reproduces the published bytes; `rx read pil.rx --pretty`
+inspects it, and `rx read pil.rx pil.rx` reads its own PIL encoding through the
+layout it describes.
+
+Records print as JSONL by default. `--pretty` prints each record as indented
+JSON; omit the data path to print the Definition itself. Absent fields are
+omitted and explicit nulls remain null. Bytes are JSON octet arrays, UUIDs are
+dashed hexadecimal strings, timestamps retain their declared integer units,
+and integer output preserves the full signed/unsigned 64-bit range. PAC common
+fields are merged before rendering. The reader validates definition digests,
+required extensions, field values, framing, compression bounds and checksums.
+It accepts adjacent PACs, Go-compressed PACs, and external gzip streams. `-`
+reads records from stdin or writes binary definition bytes to stdout.
+
+`rx write` accepts a JSON layout Definition (including application annotations)
+or the JSON-editable CDDL schema model. It writes binary PIL; `--pretty` applies
+to JSON read output. To compile CDDL source, name its root rule explicitly:
+
+```sh
+rx write purchase.cddl purchase.rx --root purchase
+rx read purchase.rx --pretty > purchase.json
+# Edit the schema JSON, then compile it back to PIL:
+rx write purchase.json purchase.rx
+```
+
+The CDDL compiler supports named nonrecursive rules, closed text-keyed records,
+required/optional members, homogeneous arrays with occurrence bounds, choices,
+literals, uint, bool, float64, text, bytes, null, bounded 64-bit integer ranges,
+and supported `.size` constraints. It rejects recursive rules, dynamic maps,
+generics, group rules, tuple arrays, unbounded `int`/`nint`, and unsupported
+controls. JSON byte values are octet arrays. The PIL document contains an ordinary
+root Definition plus a `cddl` annotation with the editable schema. Rust, Go, and
+WASM load the same compiled schema runtime and validate nested layouts. The
+layouts are derived together; full schema checks run during encoding and
+ordinary decoding, while `decode_trusted_json` performs structural decoding
+only.
+
+A schema's `fixed_strings` map binds qualified field paths (for example,
+`purchase.customer.name`) to byte capacities. Bindings must cover a bounded
+CDDL text size. `STRING(n)` uses a 1/2/4-byte little-endian length prefix for
+capacities up to 255/65,535/U32 maximum, followed by exactly `n` UTF-8 bytes
+with zero padding. Shorter strings, trailing spaces and embedded NULs survive;
+overflow, malformed UTF-8 and nonzero padding are errors. This storage choice
+does not change the CDDL size constraint.
 
 ## Validation and Trusted Reception
 
@@ -59,45 +208,18 @@ shape and monotonic in-bounds offsets. The application verifies both the PAC and
 the directory before using this path, binds them to the same definition and block,
 and owns storage publication ordering. These APIs do not change the wire format.
 
-## Fixed-Width PAC Design
+## Current Variable-Length Records
 
-Planned, not yet a supported packing mode. A Definition may request
-`"pac": {"layout": "fixed"}`. This is a packing contract, separate from scalar
-field types. The byte stride belongs to each PAC because common-value factoring
-can change member widths. Variable-length PACs remain the default.
+PIL records and PAC members remain variable length. A Definition specifies field
+types, ordering, dictionaries and schema constraints; it does not imply that
+all fields occur in every record. ABSENT and NULL retain their distinct meanings,
+and absent fields do not receive fabricated values or reserved payload slots.
+Fixed-width scalar types and fixed-capacity strings remain supported when
+present, without imposing a fixed record stride.
 
-An optional `FixedStride` PAC header extension will carry a nonzero U32
-little-endian `member_stride`. The extension appears in the decoded semantic
-header, inside the compressed body when compression is used. Its type identifier
-will be assigned with the implementation. No extra per-record header is needed.
-
-- Address member `i` as `members_start + i × member_stride`; require
-  `member_count × member_stride == decoded_size − members_start`.
-- Empty PACs have no addressable members; omit stride metadata unless a stride
-  is supplied by the packing contract.
-- This guarantees record offsets, not equal field offsets within every record.
-  Fixed field positions require a stronger presence/layout contract.
-- Every member remains a valid PIL frame. No implicit padding, changed field
-  states, or new meaning for absent/null values.
-- Verify equal encoded lengths after common-value factoring. If factoring breaks
-  uniformity, omit factoring; if the original frames still differ, reject a
-  fixed-width request. Never silently change it to variable-width packing.
-- Fixed-width scalar types alone cannot guarantee fixed-width records: optional
-  fields and adaptive integers can change encoded lengths. Variable fields can
-  participate only when their encoded frame lengths satisfy the same contract.
-- The Definition requests the contract; the PAC records the verified stride.
-  Header validation and member validation must agree before exposing random access.
-- Direct addressing is into the decoded PAC. Whole-PAC compression still requires
-  decompression; compressed-byte seeking requires a separate block design.
-
-Readers without the optional optimization can scan the ordinary PIL frames.
-Implementation must cover Go packing, Rust/WASM validation and random access,
-JavaScript header parsing, malformed strides, common prefixes and compression.
-
-**TODO:** Explore a tool that accepts CDDL with PIL layout conventions or
-annotations and generates a definition-specific WASM encoder/decoder. Preserve
-wire compatibility and validation, and benchmark the potential performance gains
-against the generalized codec.
+CDDL schema validation uses the shared runtime across language bindings.
+Application-specific validation remains the responsibility of the consuming
+system and is not duplicated in the CDDL compiler.
 
 ## Nested-Object Experiment
 
@@ -105,14 +227,15 @@ The Rust [nested-object example](rust/examples/nested_objects.rs) composes a
 purchase, customer, address, and variable-length item list from existing PIL
 frames. Their logical types are declared together in
 [nested_objects.cddl](rust/examples/nested_objects.cddl), using named CDDL rules.
-The layout bindings are handwritten for this experiment; this is not an
-arbitrary CDDL importer or a supported public `OBJECT` wire type.
+This original experiment uses handwritten layout bindings. The `schema` feature
+now compiles the supported CDDL subset; `OBJECT` separately carries open values
+using the built-in native PIL value layout.
 
 Nested objects occupy `BYTES` fields; object lists use `ARRAY<BYTES>`, with each
 body containing another PIL frame. The containing layout supplies the child
-layout, without a per-child definition identifier. Event payloads contain no
-CBOR. The four existing definition documents still use CBOR. A production
-implementation needs portable child-layout bindings and generic recursive
+layout, without a per-child definition identifier. Record payloads contain no
+CBOR. Definitions now also use native PIL. The CDDL compiler supplies portable
+child-layout bindings and generic recursive
 validation before other codecs can interpret these byte fields as objects.
 
 ```sh
@@ -135,7 +258,8 @@ A deterministic 10,000-purchase sample (one to five items per purchase) produced
 | Compact JSONL | 2,806,680 | 190,934 |
 
 These are identical logical records, with no indexes, PAC factoring, or shared
-compression dictionary. The four PIL layout documents add 450 bytes once; the
+compression dictionary. The original benchmark used 450 bytes for four layout
+documents; that older Definition encoding is not the current PIL wire size. The
 CDDL source is 251 bytes. PIL reduced raw size substantially, but its compressed
 advantage over JSONL was only about 6.2% on this sample. This is a codec experiment,
 not a production storage or throughput claim. The example also prints a local
@@ -161,12 +285,10 @@ npm --prefix npm install
 npm --prefix npm run build
 npm --prefix npm test
 
-# Portable Go codec (no C toolchain required)
-go -C go test ./codec
-
-# Native library and Go wrapper
+# Native library, Go codec, and Go wrapper
 cargo build --locked --release --manifest-path rust/ffi/Cargo.toml
 cargo test --locked --manifest-path rust/ffi/Cargo.toml
+go -C go test ./codec
 go -C go test -race ./...
 ```
 
@@ -179,12 +301,13 @@ Close Go definition handles explicitly. Calls on one handle are serialized;
 independent handles can run concurrently. WASM instances are worker-local.
 Definitions must be supplied before their records can be decoded.
 
-## Format Reference
+## Current Format Reference
 
 **Project:** Version zero; not a frozen interoperability standard.
 
-This is the primary PIL reference. It describes the implemented format unless
-explicitly marked **proposed**. Trie-Trunk owns its replication and storage binding.
+This section describes the implemented version-zero layout, including named
+headers and optional addressing controls. Applications own storage and delivery
+bindings.
 
 PIL exchanges structured state under a shared, immutable Definition. Field
 positions replace names, dictionaries replace repeated strings, and cumulative
@@ -194,22 +317,21 @@ prescribe storage, routing, subscriptions, or query execution.
 
 ### 1. Definition
 
-The wire Definition is CBOR. [definition.cddl](schemas/definition.cddl) describes its
+The wire Definition is PIL, using the built-in `pil/value` bootstrap layout. [definition.cddl](schemas/definition.cddl) describes its
 portable structure and extensible annotations; codec validation additionally
 enforces semantic rules. This JSON illustration uses the same data model:
 
 ```json
 {
   "pil": 0,
-  "definition": "payment/transactions",
+  "definition": "example/records",
   "version": 0,
   "fields": [
-    { "name": "event_id", "type": "UUID" },
     { "name": "id", "type": "UUID" },
     { "name": "revision_id", "type": "U64" },
     { "name": "state", "type": "STRING", "values": ["pending", "authorized", "canceled"] },
     { "name": "description", "type": "STRING" },
-    { "name": "@fields", "type": "CBOR" }
+    { "name": "@fields", "type": "OBJECT" }
   ]
 }
 ```
@@ -231,12 +353,14 @@ A frame contains no Definition identifier: its enclosing binding must supply the
 exact Definition before decoding. A structurally compatible wrong Definition
 cannot be detected from a standalone frame alone.
 
-Applications may attach resource/transport/profile annotations. Generic PIL does
-not require event IDs, object IDs, revisions, a trie, or a resource binding.
+Applications may attach resource/transport/profile annotations. Generic PIL
+does not prescribe application identities, revisions, tree structures, or
+resource bindings.
 Bindings using a digest retain the exact original Definition document bytes;
 reserializing a semantic equivalent need not preserve its digest. JSON imports
-produce CBOR once at registration; they do not yet canonicalize differently
-ordered but equivalent JSON sources to one digest.
+produce PIL once at registration. Bootstrap map entries are sorted by their
+encoded keys; ordered field arrays and dictionary arrays retain their order.
+Forwarding preserves the exact accepted document bytes and annotations.
 
 ### 2. Types and Byte Conventions
 
@@ -249,19 +373,25 @@ the generic UUID primitive does not require version 7.
 |---|---|
 | `BOOL` | 1 byte: `00` false, `01` true; other values invalid |
 | `I8/I16/I32/I64`, `U8/U16/U32/U64` | 1/2/4/8 bytes, subject to §4 |
+| `U24` | Exactly 3 bytes, little-endian; 0–16,777,215; not adaptive |
 | `F32`, `F64` | 4/8 bytes |
 | `UUID` | 16 bytes |
 | `TIMESTAMP_MS`, `TIMESTAMP_US`, `TIMESTAMP_NS` | Signed 8-byte Unix time; Definition supplies the unit |
 | `REF16` | Opaque unsigned 2-byte shared-value reference, 0–65,535 |
 | `STRING` | UTF-8 bytes, or a DIRECT dictionary ID |
+| `STRING(n)` | Fixed UTF-8 byte capacity, explicit length, then zero padding |
+| `OBJECT` | One native PIL bootstrap value, including nested objects and arrays |
 | `BYTES` | Arbitrary bytes |
-| `CBOR` | Exactly one complete CBOR data item |
 | `ARRAY<T>` | Homogeneous scalar elements; layout in §6 |
 
 There is no bare `TIMESTAMP` type or implicit unit inference. REF16's target and
 scope must be supplied by the binding; PIL reserves no REF16 value and does not
-assume that the target is a trie leaf. A dictionary ID instead refers to its own
+interpret the target. A dictionary ID instead refers to its own
 field's Definition dictionary and uses the smallest width covering its largest ID:
+CDDL bounded unsigned integers above U16 and no greater than 16,777,215 lower to
+`U24`. Rust, Go, the portable TypeScript reader, and WASM use the same three-byte
+representation. Bounds remain part of validation.
+
 1–256 entries → U8; 257–65,536 → U16; up to 2³² → U32; larger → U64.
 No dictionary ID is an extension sentinel. Out-of-range IDs are invalid.
 
@@ -286,11 +416,12 @@ bits, first field in bits 7–6, then 5–4, 3–2, 1–0. Unused low bits are z
 | `11` | OFFSET | One cumulative End Offset and a value in the variable section |
 
 ABSENT and NULL are distinct. Applications decide how absence affects a complete
-object or a patch; PIL does not turn NULL into deletion. Ordinary fields currently
-permit both states; `@fields` forbids NULL. Required/nullable annotations are not
-implemented (§10).
+object or a patch; PIL does not turn NULL into deletion. Ordinary scalar layouts
+permit both states; `@fields` forbids NULL. A compiled CDDL schema can further
+constrain presence and nullability. Arbitrary annotations do not add validation
+rules (§10).
 
-Fixed-width types accept DIRECT, not OFFSET. Unmapped STRING, BYTES, CBOR, and
+Fixed-width types accept DIRECT, not OFFSET. Unmapped STRING, BYTES, OBJECT, and
 arrays accept OFFSET, not DIRECT. A mapped STRING accepts either an in-range
 DIRECT ID or a literal OFFSET string, including a string present in its dictionary.
 The encoder does not automatically replace literal strings with dictionary IDs.
@@ -371,25 +502,35 @@ Fixed-width T:   [extended count][value₁]...[valueₙ]
 Variable T:     [extended count][extended end₁]...[extended endₙ][values...]
 ```
 
-For STRING/BYTES/CBOR elements, ends are cumulative byte offsets relative to the
+For STRING/BYTES/OBJECT elements, ends are cumulative byte offsets relative to the
 **element-value section**, not the array start. The final end must equal that
 section's length; fixed-width size must equal `encoded_count_size + count × width`.
 
 Example STRING array: `[3][5][10][19][JasonSmithAlexander]` (conceptual integers).
 An empty array is the two-byte count zero alone, distinct from ABSENT and NULL.
-Elements cannot be absent or null; `ARRAY<CBOR>` rejects a top-level null element
-but permits nulls inside complex items. Native arrays are not nested; CBOR supplies
-complex/nested structures. There is no ARRAY<PIL> type: use a sequence or PAC for
+Elements cannot be absent or null; `ARRAY<OBJECT>` rejects a top-level native null element
+but permits nulls inside complex items. Use `OBJECT` for native nested structures,
+or CDDL-compiled nested frames in `BYTES`/`ARRAY<BYTES>`. There is no ARRAY<PIL> type: use a sequence or PAC for
 Definition-bound PIL records. Native arrays do not require PAC.
 
-### 7. CBOR and Dynamic Fields
+### 7. Native Objects and Dynamic Fields
 
-Each CBOR range contains exactly one complete item, without trailing bytes.
-Ordinary CBOR structure remains opaque to PIL beyond validation.
+`OBJECT` uses the same built-in `pil/value` layout as Definition documents.
+The ordered fields are `kind:U8`, `unsigned:U64`, `negative:I64`, `float:F64`,
+`text:STRING`, `bytes:BYTES`, and `children:ARRAY<BYTES>`. Kinds 0–9 represent
+null, false, true, unsigned integer, negative integer, float, text, bytes,
+array, and map. Only the payload selected by `kind` is present. Each child is
+another bootstrap value; maps alternate text/integer keys and values, reject
+duplicate keys, and sort encoded keys when writing. Codecs bound values to
+16 MiB and nesting to 64 levels. This layout needs no external Definition.
+
+CBOR is an external ingestion format only. `CBOR` and `ARRAY<CBOR>` are rejected
+as PIL field types; ingress adapters decode them to native PIL objects before
+storage or runtime processing.
 
 Field names beginning with `@` are reserved. The only implemented reserved field
-is explicitly declared `@fields: CBOR`; omitting it disallows dynamic root fields.
-When present it must be an OFFSET CBOR map with unique text keys, none beginning
+is explicitly declared `@fields: OBJECT`; omitting it disallows dynamic root fields.
+When present it must be an OFFSET native PIL map with unique text keys, none beginning
 with `@` or colliding with any defined field. Its entries represent additional
 root attributes; `@fields` is not itself an application property.
 
@@ -399,7 +540,7 @@ NULL is invalid. The codec validates the representation; applying patches is an
 application responsibility. Promoting a dynamic key into a defined field requires
 a new Definition and removal of that key from `@fields` for frames using it.
 
-### 8. PAC — Prefixed Array Container
+### 8. PAC — Packed Array Container
 
 PAC optionally groups ordered PIL records under one exact Definition. A common
 frame can factor shared values at **arbitrary field positions**; positions need
@@ -411,13 +552,17 @@ and the browser binding.
 | Offset | Bytes | Value |
 |---|---:|---|
 | 0 | 4 | U32 decoded container length, including header |
-| 4 | 4 | U32 flags: bit 0 = common frame; other bits rejected in decoded PACs |
+| 4 | 4 | U32 flags: bit 2 = required layout controls; bit 0 = common frame; other bits rejected |
 | 8 | 8 | U64 total decoded PAC length, including header |
 | 16 | 8 | U64 header length / first member position |
 | 24 | 8 | U64 member count |
 | 32 | 32 | Exact Definition digest (SHA-256 of bound Definition bytes) |
 | 64 | variable | Extended extension count, then extension entries |
+| following | 1 | Directory address width: 0, 2, 3, or 4 bytes |
+| following | 4 | U32 fixed record width; zero means variable members |
+| following | variable | Extended named-header count, then name/value entries |
 | following | variable | Extended common-frame length, common PIL frame if present |
+| following | count × address width | Member-relative start offsets, if enabled |
 | header end | variable | Consecutive PIL member frames |
 
 An extension is `[type U32][schema version U16][flags U16][extended length][bytes]`.
@@ -427,7 +572,14 @@ unsupported versions of recognized types, and duplicates. Type 1 carries a UTF-8
 source name. Other extension identifiers and their interpretation are owned by
 application bindings. The host passes its supported identifiers to the decoder.
 
-Header length includes extensions and common frame. Zero common length means no
+Named headers are `[extended name length][UTF-8 name][extended value length][bytes]`,
+strictly sorted by UTF-8 name bytes with unique, nonempty names. Directory offsets
+start at zero, increase strictly, and stay within the member body. Fixed-width
+members must fill exactly `count × width` bytes; any directory must agree with
+that stride.
+
+Header length includes extensions, layout controls, named headers, common frame,
+and the optional directory. Zero common length means no
 prefix and requires the common flag to be clear. Empty PACs are valid. Member
 count, self-delimited member lengths, and total PAC length must agree exactly.
 Stored and decoded container lengths are bounded by U32. Readers must impose
@@ -445,10 +597,10 @@ decoded extent and member lengths.
 A packed member is structurally a PIL frame but needs its common frame to recover
 the original logical object. Readers can borrow common/member field spans without
 materializing maps or expanding repeated bytes. Standalone export must restore
-inherited fields. A native storage projection may additionally need companion
-index/trie data and must declare that requirement through its extension.
+inherited fields. A consumer may require companion indexes or metadata and must
+declare that requirement through its extension.
 
-PAC is neither a pagination protocol nor proof of cache completeness. It does not
+PAC is not a pagination protocol or proof of delivery completeness. It does not
 require compression or provide timestamp-base shortening.
 
 #### Compressed Representation
@@ -464,7 +616,7 @@ common frame, and records. A compressed PAC has this separate 16-byte header:
 | 12 | 4 | U32 record count |
 | 16 | remaining | One gzip member containing the complete decoded PAC |
 
-The discriminator shares its position with decoded PAC flags: `0` or `1` means
+The discriminator shares its position with decoded PAC flags: `4` or `5` means
 a decoded PAC; `2` means this compressed representation. Common-frame flags and
 all semantic metadata exist only inside the compressed body. No outer routing,
 Definition, common-prefix, or placement fields are added.
@@ -473,14 +625,14 @@ The library validates stored/decoded bounds, gzip CRC, absence of trailing data,
 and agreement between wrapper length/count and the decoded header. Expansion
 returns the original decoded PAC bytes exactly. The decoded header replaces the
 wrapper; no wrapper fields are copied into or patched onto it. Borrowed PIL
-scanners consume that decoded representation. The outer wrapper is not persisted
-in uncompressed client storage.
+scanners consume that decoded representation. Applications choose whether to
+retain the compressed or uncompressed representation.
 
 ### 9. Validation and Transport Boundaries
 
 Reject invalid masks/padding, type-state combinations, dictionary IDs, integer
 selectors, noncanonical lengths, decreasing/out-of-range offsets, invalid UTF-8,
-malformed arrays/CBOR, extension collisions, PAC overrides, and inconsistent
+malformed arrays/objects, extension collisions, PAC overrides, and inconsistent
 bindings/counts/lengths. Check arithmetic and resource limits before allocating
 or reading. Distinguish truncated input that can receive more bytes from malformed
 values within an already complete bounded frame.
@@ -489,33 +641,19 @@ HTTP/JMS negotiation, storage addresses, and routing are application/transport
 bindings. A transport must supply the exact definition before dependent data.
 HTTP content compression applies to a transport representation; PAC compression
 belongs to each container and is decoded by the library. Neither requires a
-particular datastore, time partition, event identity, or subscription protocol.
+particular datastore, time partition, record identity, or subscription protocol.
 Compression does not imply encryption.
 
-### 10. Proposed, Not Implemented
+### 10. Implementation Boundaries
 
-The core Definition currently has no `header`, `required`, `nullable`, or
-application `property` annotation. These were discussed as follows:
+Named application headers, embedded member directories, and fixed-width controls
+are implemented in the current version-zero format. Numeric extensions remain
+available for explicit application contracts. Definition annotations do not gain
+implicit packing behavior merely by being present.
 
-- **Message headers:** a contiguous leading group in the ordered Definition,
-  covered by the ordinary state mask, with DIRECT bytes before the body.
-  Only fixed-width representations; no variable pointers, arrays, or adaptive
-  header integers. Mapped STRING headers would require dictionary-only encoding.
-- **Header requirements:** optional headers could be ABSENT; `required` would
-  require DIRECT even in partial messages. NULL/OFFSET would be invalid.
-  Application properties would remain ordinary body fields.
-- **Independent body compression:** keep the state mask and header values visible;
-  encode the body codec and stored/decoded lengths before compressed body bytes.
-  Body adaptive selectors, DIRECT values, offsets, and values would be inside.
-  An outer transport could still compress everything.
-- **Field validation:** nullable/required application contracts are not enforced
-  by the current generic Definition; do not assume annotations change its layout.
-- **Time-base packing:** shared epochs and shortened timestamps/UUIDv7 values
-  remain deferred. Current PAC does not implement them.
-
-These are design directions, not accepted input features. Unknown annotations
-must not be relied on for validation or wire-layout changes. Introducing any of
-them requires coordinated codec/binding tests and performance measurements.
+CDDL support is a documented subset; unsupported constructs are rejected.
+Neither the generic codec nor a PAC checksum enforces application authorization,
+retention, delivery completeness, or resource roles. Those belong to the consumer.
 
 ### Public Rust APIs
 
@@ -528,7 +666,7 @@ fields without materializing objects. `compression::inflate` is feature-gated.
 Development schema checks can also validate consumer profiles:
 
 ```sh
-cargo run --locked --manifest-path rust/Cargo.toml --example check_definition -- schema.cddl definition.cbor
+cargo run --locked --manifest-path rust/Cargo.toml --example check_definition -- schema.cddl definition.rx
 ```
 
 This checks CDDL structure plus PIL layout semantics. It does not execute a
@@ -537,3 +675,25 @@ consumer's additional semantic validators. The CDDL tool is a dev dependency.
 ## License
 
 [Apache-2.0](LICENSE).
+
+### Shared Nested Schema Runtime
+
+CDDL authoring compiles to binary PIL `.rx` documents containing their complete
+structured schema. Rust `DefinitionDocument`, the Go bindings and `go/codec`
+layouts, and the Rust WASM codec use the same interpreter for nested records,
+arrays, named types, choices, sparse members, and constraints. Registration
+rejects disagreement between the schema and its compiled root layout. Full
+frame and resolved PAC validation checks nested children; explicit structural
+APIs remain available for trusted, integrity-checked data.
+
+Go exposes `EncodeJSON` and `DecodeJSON`; WASM's `Codec` exposes `encodeJSON` and
+`decodeJSON`. Pass JSON text so 64-bit numbers never pass through a JavaScript
+floating-point object. Native `.rx` bytes and annotations remain digest-bound.
+Go's schema support links the Rust FFI library: build `rust/ffi` in release mode
+before testing or consuming the Go package. CDDL source parsing is a separate
+`schema` feature used by `rx`; runtime schema interpretation is enabled by
+default. Keep CDDL compiler tests in `rust/tests/schema.rs`, `.rx` CLI behavior
+in `rust/tests/rx.rs`, bootstrap Definition conformance in
+`rust/tests/documents.rs`, and binding parity in `go/codec/schema_test.go` plus
+`npm/test.mjs`. Application-specific profile tests belong with the application
+that owns those semantics.

@@ -8,6 +8,7 @@ pub struct Context {
     document: Option<DefinitionDocument>,
     index: FrameIndex,
     error: String,
+    output: Vec<u8>,
 }
 
 #[unsafe(no_mangle)]
@@ -51,7 +52,7 @@ unsafe fn input<'a>(bytes: *const u8, length: usize) -> Result<&'a [u8], Error> 
 
 /// # Safety
 /// ctx is live and exclusively borrowed; bytes points to length readable bytes.
-/// format: 0 = CBOR, 1 = JSON. No pointer into input survives the call.
+/// format: 0 = PIL, 1 = JSON. No pointer into input survives the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pp_define(
     ctx: *mut Context,
@@ -65,7 +66,7 @@ pub unsafe extern "C" fn pp_define(
     invoke(ctx, |ctx| {
         let bytes = unsafe { input(bytes, length)? };
         let document = match format {
-            0 => DefinitionDocument::from_cbor(bytes)?,
+            0 => DefinitionDocument::from_pil(bytes)?,
             1 => DefinitionDocument::from_json(bytes)?,
             _ => return Err(Error::Invalid("unknown definition format")),
         };
@@ -93,7 +94,7 @@ pub unsafe extern "C" fn pp_scan(
             .document
             .as_ref()
             .ok_or(Error::Invalid("definition not loaded"))?;
-        Ok(ctx.index.scan(d.definition(), bytes, maximum)? as i64)
+        Ok(d.scan(&mut ctx.index, bytes, maximum)? as i64)
     })
 }
 
@@ -114,9 +115,9 @@ pub unsafe extern "C" fn pp_document(ctx: *const Context, length: *mut usize) ->
         return std::ptr::null();
     };
     unsafe {
-        *length = d.as_cbor().len();
+        *length = d.as_pil().len();
     }
-    d.as_cbor().as_ptr()
+    d.as_pil().as_ptr()
 }
 
 /// # Safety
@@ -137,4 +138,50 @@ pub unsafe extern "C" fn pp_error(ctx: *const Context, length: *mut usize) -> *c
         *length = ctx.error.len();
     }
     ctx.error.as_ptr()
+}
+
+/// # Safety
+/// Same input and handle requirements as pp_scan. Output is borrowed until the
+/// next mutation. mode 0 encodes JSON, mode 1 decodes a complete PIL record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pp_json(
+    ctx: *mut Context,
+    bytes: *const u8,
+    length: usize,
+    mode: u8,
+) -> i64 {
+    let Some(ctx) = (unsafe { ctx.as_mut() }) else {
+        return -1;
+    };
+    invoke(ctx, |ctx| {
+        let input = unsafe { input(bytes, length)? };
+        let d = ctx
+            .document
+            .as_ref()
+            .ok_or(Error::Invalid("definition not loaded"))?;
+        ctx.output = match mode {
+            0 => d.encode_json(input)?,
+            1 => d.decode_json(input)?,
+            _ => return Err(Error::Invalid("unknown JSON operation")),
+        };
+        Ok(ctx.output.len() as i64)
+    })
+}
+/// # Safety
+/// A live handle and writable length pointer are required. Copy before mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pp_output(ctx: *const Context, length: *mut usize) -> *const u8 {
+    if length.is_null() {
+        return std::ptr::null();
+    }
+    unsafe {
+        *length = 0;
+    }
+    let Some(ctx) = (unsafe { ctx.as_ref() }) else {
+        return std::ptr::null();
+    };
+    unsafe {
+        *length = ctx.output.len();
+    }
+    ctx.output.as_ptr()
 }

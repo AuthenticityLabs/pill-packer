@@ -6,14 +6,21 @@ rust-version = "1.88"
 license = "Apache-2.0"
 description = "Portable PIL encoding, decoding, and PAC reading"
 repository = "https://github.com/AuthenticityLabs/pill-packer"
-homepage = "https://trietrunk.com/PIL"
+homepage = "https://github.com/AuthenticityLabs/pill-packer"
 publish = false
 
 [features]
+default = ["schema-runtime"]
 gzip = ["dep:flate2"]
 json = ["dep:serde_json"]
+schema-runtime = ["json", "dep:serde"]
+schema = ["schema-runtime", "dep:cddl"]
+cli = ["schema", "gzip", "dep:sha2"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+sha2 = { version = "0.10", optional = true }
+cddl = { version = "=0.10.7", default-features = false, features = ["std", "cbor", "json", "additional-controls", "ast-span"], optional = true }
 flate2 = { version = "1.1.10", optional = true, default-features = false, features = ["rust_backend"] }
 ciborium = "0.2.2"
 ciborium-ll = "0.2.2"
@@ -21,6 +28,11 @@ serde_json = { version = "1.0", optional = true }
 
 [lib]
 name = "pil_codec"
+
+[[bin]]
+name = "rx"
+path = "src/bin/rx.rs"
+required-features = ["cli"]
 
 [dev-dependencies]
 cddl = { version = "=0.10.7", default-features = false, features = ["std", "cbor", "json", "additional-controls", "ast-span"] }

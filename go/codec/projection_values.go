@@ -11,8 +11,19 @@ func FieldCBOR(f Field, v Value) ([]byte, error) {
 	if v.State == Null {
 		return []byte{0xf6}, nil
 	}
-	if f.Type == "CBOR" {
-		return v.Bytes, nil
+	if capacity, ok := FixedStringCapacity(f.Type); ok {
+		text, err := FixedString(v.Bytes, capacity)
+		if err != nil {
+			return nil, err
+		}
+		return encoder.Marshal(string(text))
+	}
+	if f.Type == "OBJECT" {
+		var value any
+		if err := UnmarshalObject(v.Bytes, &value); err != nil {
+			return nil, err
+		}
+		return encoder.Marshal(value)
 	}
 	if strings.HasPrefix(f.Type, "ARRAY<") {
 		element := f.Type[6 : len(f.Type)-1]
@@ -79,7 +90,7 @@ func FieldCBOR(f Field, v Value) ([]byte, error) {
 }
 
 // ValueFromCBOR converts one extension value to a declared PIL field. It does
-// not decode an entire event or infer a definition. The caller must keep raw
+// not decode an entire record or infer a definition. The caller must keep raw
 // alive while using the returned value, which may borrow its bytes.
 func (l *Layout) ValueFromCBOR(index int, raw []byte) (Value, error) {
 	if index < 0 || index >= len(l.Definition.Fields) {
@@ -89,11 +100,27 @@ func (l *Layout) ValueFromCBOR(index int, raw []byte) (Value, error) {
 }
 
 func ValueFromCBOR(f Field, w int, raw []byte) (Value, error) {
+	if capacity, ok := FixedStringCapacity(f.Type); ok {
+		if len(raw) == 1 && raw[0] == 0xf6 {
+			return Value{State: Null}, nil
+		}
+		var text string
+		if err := decoder.Unmarshal(raw, &text); err != nil {
+			return Value{}, err
+		}
+		return FixedText(text, capacity)
+	}
+
 	if len(raw) == 1 && raw[0] == 0xf6 {
 		return Value{State: Null}, nil
 	}
-	if f.Type == "CBOR" {
-		return Value{Offset, raw}, nil
+	if f.Type == "OBJECT" {
+		var value any
+		if err := decoder.Unmarshal(raw, &value); err != nil {
+			return Value{}, err
+		}
+		body, err := MarshalObject(value)
+		return Value{Offset, body}, err
 	}
 	if strings.HasPrefix(f.Type, "ARRAY<") {
 		var items []cbor.RawMessage

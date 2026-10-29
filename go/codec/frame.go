@@ -3,7 +3,6 @@ package codec
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/fxamacker/cbor/v2"
 	"io"
 	"strings"
 	"unicode/utf8"
@@ -23,21 +22,42 @@ type Value struct {
 	Bytes []byte `cbor:"1,keyasint"`
 }
 type Frame struct {
-	Values                             []Value
-	Bytes                              []byte
-	Ends                               [][2]int
-	compressedIdentity, compressedBody *Frame
-	inflated                           []byte
+	Values []Value
+	Bytes  []byte
+	Ends   [][2]int
 }
 
 // Scan borrows scalar bytes from the frame. It never constructs an object map.
 func (l *Layout) Scan(raw []byte, reuse *Frame) error {
-	if l.IsCompressed(raw) {
-		return l.scanCompressed(raw, reuse)
-	}
 	return l.ScanPlain(raw, reuse)
 }
+func (l *Layout) validateSchemaValues(values []Value) error {
+	if l.schema == nil {
+		return nil
+	}
+	raw, err := l.encodeFragment(nil, values)
+	if err != nil {
+		return err
+	}
+	_, err = l.schema.Scan(raw, MaxFrame)
+	return err
+}
 func (l *Layout) ScanPlain(raw []byte, reuse *Frame) error {
+	if err := l.scanFragment(raw, reuse); err != nil {
+		return err
+	}
+	if l.schema != nil {
+		n, err := l.schema.Scan(raw, MaxFrame)
+		if err != nil {
+			return err
+		}
+		if n != len(raw) {
+			return fmt.Errorf("trailing frame bytes")
+		}
+	}
+	return nil
+}
+func (l *Layout) scanFragment(raw []byte, reuse *Frame) error {
 	if l.integers != nil {
 		return l.integers.scan(raw, reuse)
 	}
@@ -76,6 +96,11 @@ func (l *Layout) ScanPlain(raw []byte, reuse *Frame) error {
 			}
 			v.Bytes = raw[at : at+w]
 			at += w
+			if capacity, ok := FixedStringCapacity(f.Type); ok {
+				if _, err := FixedString(v.Bytes, capacity); err != nil {
+					return err
+				}
+			}
 			if f.Type == "BOOL" && v.Bytes[0] > 1 {
 				return fmt.Errorf("invalid bool")
 			}
@@ -179,6 +204,14 @@ func ValidateArray(kind string, b []byte) error {
 		if count > uint64((len(b)-at)/w) || uint64(len(b)-at) != count*uint64(w) {
 			return fmt.Errorf("array size mismatch")
 		}
+		if capacity, ok := FixedStringCapacity(kind); ok {
+			start := len(b) - int(count)*w
+			for at := start; at < len(b); at += w {
+				if _, err := FixedString(b[at:at+w], capacity); err != nil {
+					return err
+				}
+			}
+		}
 		if kind == "BOOL" {
 			for _, v := range b[at:] {
 				if v > 1 {
@@ -215,10 +248,15 @@ func ValidateArray(kind string, b []byte) error {
 			if !utf8.Valid(v) {
 				return fmt.Errorf("invalid array UTF-8")
 			}
-		case "CBOR":
-			if err := cbor.Valid(v); err != nil {
+		case "OBJECT":
+			node, err := parseObject(v, 0)
+			if err != nil {
 				return err
 			}
+			if node.kind == 0 {
+				return fmt.Errorf("null array element")
+			}
+
 		}
 		prev = end
 	}
@@ -227,6 +265,18 @@ func ValidateArray(kind string, b []byte) error {
 
 // Encode preserves borrowed, already encoded primitive values and field states.
 func (l *Layout) Encode(dst []byte, values []Value) ([]byte, error) {
+	raw, err := l.encodeFragment(dst, values)
+	if err != nil {
+		return nil, err
+	}
+	if l.schema != nil {
+		if _, err = l.schema.Scan(raw, MaxFrame); err != nil {
+			return nil, err
+		}
+	}
+	return raw, nil
+}
+func (l *Layout) encodeFragment(dst []byte, values []Value) ([]byte, error) {
 	if l.integers != nil {
 		return l.integers.encode(dst, values)
 	}
@@ -276,14 +326,11 @@ func Text(s string) Value { return Value{Offset, []byte(s)} }
 // ReadFrame discovers the boundary from the definition and final cumulative
 // offset, using PIL's normal layout rather than an extra per-frame length tag.
 func (l *Layout) ReadFrame(input io.Reader, dst []byte) ([]byte, error) {
-	return l.ReadFrameEnvelope(input, dst, true)
-}
-func (l *Layout) ReadFrameEnvelope(input io.Reader, dst []byte, envelope bool) ([]byte, error) {
-	return l.ReadFrameBuffer(input, dst, envelope, nil)
+	return l.ReadFrameBuffer(input, dst, nil)
 }
 
 // Native ingress supplies a resizer so no frame payload is allocated by Go.
-func (l *Layout) ReadFrameBuffer(input io.Reader, dst []byte, envelope bool, resize func(int) ([]byte, error)) ([]byte, error) {
+func (l *Layout) ReadFrameBuffer(input io.Reader, dst []byte, resize func(int) ([]byte, error)) ([]byte, error) {
 	mask := (len(l.Widths) + 3) / 4
 	var e error
 	if resize != nil {
@@ -317,19 +364,6 @@ func (l *Layout) ReadFrameBuffer(input io.Reader, dst []byte, envelope bool, res
 		}
 		_, err := io.ReadFull(input, dst[at:])
 		return err
-	}
-	if envelope && l.compressedMarker(dst) {
-		if e = appendN(compressionHeader); e != nil {
-			return nil, e
-		}
-		_, identity, _, stored, err := l.CompressionLengths(dst)
-		if err != nil {
-			return nil, err
-		}
-		if e = appendN(identity + stored); e != nil {
-			return nil, e
-		}
-		return dst, nil
 	}
 	var plane []byte
 	bit := 0
@@ -406,21 +440,24 @@ func (l *Layout) ValidateOffset(i int, raw []byte) error {
 		if !utf8.Valid(raw) {
 			return fmt.Errorf("invalid UTF-8")
 		}
-	case "CBOR":
-		if err := cbor.Valid(raw); err != nil {
+	case "OBJECT":
+		node, err := parseObject(raw, 0)
+		if err != nil {
 			return err
 		}
 		if f.Name == "@fields" {
-			if len(raw) == 0 || raw[0]>>5 != 5 {
-				return fmt.Errorf("@fields must be a map")
+			if node.kind != 9 {
+				return fmt.Errorf("@fields must be an object")
 			}
-			var extra map[string]cbor.RawMessage
-			if err := decoder.Unmarshal(raw, &extra); err != nil {
-				return err
-			}
-			for _, field := range l.Definition.Fields {
-				if _, ok := extra[field.Name]; ok {
-					return fmt.Errorf("@fields shadows %s", field.Name)
+			for j := 0; j < len(node.children); j += 2 {
+				key, ok := node.children[j].value.(string)
+				if !ok || strings.HasPrefix(key, "@") {
+					return fmt.Errorf("invalid @fields key")
+				}
+				for _, field := range l.Definition.Fields {
+					if field.Name == key {
+						return fmt.Errorf("@fields shadows %s", key)
+					}
 				}
 			}
 		}
@@ -450,6 +487,11 @@ func (l *Layout) ValidateValues(values []Value) error {
 		case Direct:
 			if l.Widths[i] == 0 || len(v.Bytes) != l.Widths[i] {
 				return fmt.Errorf("direct Width mismatch")
+			}
+			if capacity, ok := FixedStringCapacity(f.Type); ok {
+				if _, err := FixedString(v.Bytes, capacity); err != nil {
+					return err
+				}
 			}
 			if f.Type == "BOOL" && v.Bytes[0] > 1 {
 				return fmt.Errorf("invalid bool")

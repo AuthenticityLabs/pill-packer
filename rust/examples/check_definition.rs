@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let schema = std::fs::read_to_string(
         args.next()
-            .ok_or("usage: check_definition schema.cddl input.cbor ...")?,
+            .ok_or("usage: check_definition schema.cddl input.rx ...")?,
     )?;
     let paths: Vec<_> = args.collect();
     if paths.is_empty() {
@@ -13,8 +13,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     for path in paths {
         let bytes = std::fs::read(&path)?;
-        cddl::validate_cbor_from_slice(&schema, &bytes, None)?;
-        DefinitionDocument::from_cbor(&bytes)?;
+        let value = pil_codec::object::decode_value(&bytes)?;
+        let mut oracle = Vec::new();
+        ciborium::ser::into_writer(&value, &mut oracle)?;
+        cddl::validate_cbor_from_slice(&schema, &oracle, None)?;
+        DefinitionDocument::from_pil(&bytes)?;
         println!("Valid structure and PIL layout: {path}");
     }
     Ok(())
