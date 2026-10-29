@@ -91,8 +91,7 @@ codecs, then compare them with the general interpreter before adopting them.
 
 Definitions describe ordered fields, binary types, and string dictionaries.
 They are stored as binary PIL files with the `.rx` extension, including their
-structured CDDL schema annotations. The fixed bootstrap is published as
-[`schemas/pil.rx`](schemas/pil.rx). Their structure is described by [CDDL](https://github.com/AuthenticityLabs/pill-packer/blob/main/schemas/definition.cddl); runtime
+structured CDDL schema annotations. Their structure is described by [CDDL](https://github.com/AuthenticityLabs/pill-packer/blob/main/schemas/definition.cddl); runtime
 validators enforce semantic rules. The document API preserves unknown annotations.
 Applications own routing, storage, delivery, and consistency policies.
 
@@ -132,20 +131,12 @@ rx read definition.rx records.pac.gz --pretty
 rx read definition.rx
 rx definition.rx --pretty
 rx write definition.json definition.rx
-rx bootstrap pil.rx
 ```
 
 `.rx` names a definition document; `.pil` names a record stream and `.pac`
 names a record pack. Every `.rx` document, including the structured CDDL schema
 inside its `cddl` annotation, is encoded entirely in PIL. JSON and `.cddl` files
 are editable authoring inputs. There is no JSON or CDDL text envelope in `.rx`.
-
-`schemas/pil.rx` describes the fixed seven-field `pil/value` layout used to encode
-all definition documents, including itself. Readers have this one small layout
-built in, so no network lookup or infinite chain of definitions is required.
-`rx bootstrap pil.rx` reproduces the published bytes; `rx read pil.rx --pretty`
-inspects it, and `rx read pil.rx pil.rx` reads its own PIL encoding through the
-layout it describes.
 
 Records print as JSONL by default. `--pretty` prints each record as indented
 JSON; omit the data path to print the Definition itself. Absent fields are
@@ -342,7 +333,7 @@ prescribe storage, routing, subscriptions, or query execution.
 
 ### 1. Definition
 
-The wire Definition is PIL, using the built-in `pil/value` bootstrap layout. [definition.cddl](schemas/definition.cddl) describes its
+The wire Definition is PIL; the codec reads its layout automatically. [definition.cddl](schemas/definition.cddl) describes its
 portable structure and extensible annotations; codec validation additionally
 enforces semantic rules. This JSON view defines the four-field record used in §3:
 
@@ -382,7 +373,7 @@ does not prescribe application identities, revisions, tree structures, or
 resource bindings.
 Bindings using a digest retain the exact original Definition document bytes;
 reserializing a semantic equivalent need not preserve its digest. JSON imports
-produce PIL once at registration. Bootstrap map entries are sorted by their
+produce PIL once at registration. Definition map entries are sorted by their
 encoded keys; ordered field arrays and dictionary arrays retain their order.
 Forwarding preserves the exact accepted document bytes and annotations.
 
@@ -404,7 +395,7 @@ the generic UUID primitive does not require version 7.
 | `REF16` | Opaque unsigned 2-byte shared-value reference, 0–65,535 |
 | `STRING` | UTF-8 bytes, or a DIRECT dictionary ID |
 | `STRING(n)` | Fixed UTF-8 byte capacity, explicit length, then zero padding |
-| `OBJECT` | One native PIL bootstrap value, including nested objects and arrays |
+| `OBJECT` | One native PIL value, including nested objects and arrays |
 | `BYTES` | Arbitrary bytes |
 | `ARRAY<T>` | Homogeneous scalar elements; layout in §6 |
 
@@ -571,7 +562,7 @@ The ordered fields are `kind:U8`, `unsigned:U64`, `negative:I64`, `float:F64`,
 `text:STRING`, `bytes:BYTES`, and `children:ARRAY<BYTES>`. Kinds 0–9 represent
 null, false, true, unsigned integer, negative integer, float, text, bytes,
 array, and map. Only the payload selected by `kind` is present. Each child is
-another bootstrap value; maps alternate text/integer keys and values, reject
+another native PIL value; maps alternate text/integer keys and values, reject
 duplicate keys, and sort encoded keys when writing. Codecs bound values to
 16 MiB and nesting to 64 levels. This layout needs no external Definition.
 
@@ -701,7 +692,7 @@ ordered field layouts and a structured `cddl` annotation; .rx contains PIL bytes
 not embedded CDDL or JSON text. Its named child layouts are resolved from the
 same schema. Schema-bound nested records use BYTES and arrays of child records
 use ARRAY<BYTES>; their contents are child PIL frames with no repeated Definition
-identifier. Arbitrary OBJECT values instead use the bootstrap layout in §7.
+identifier. Arbitrary OBJECT values instead use the native value layout in §7.
 
 The compiler accepts named nonrecursive rules, closed text-keyed records,
 required/optional members, homogeneous arrays with occurrence bounds, choices,
@@ -729,7 +720,6 @@ rx read <definition> [<pil/pac>|-] [--pretty]
 rx <definition> [--pretty]
 rx write <definition.json> <definition.rx>
 rx write <schema.cddl> <definition.rx> --root <rule>
-rx bootstrap <pil.rx>|-
 ```
 
 - `read` without a data path prints the Definition as JSON. The definition input
@@ -737,13 +727,11 @@ rx bootstrap <pil.rx>|-
 - `read` with a data path prints one JSON object per record (JSONL). It reads PIL
   streams, PACs, compressed PACs, and gzip-wrapped inputs. Common fields are
   resolved when rendering PAC members. The PAC digest must match the Definition.
-- `--pretty` indents JSON output. It is a read option; write and bootstrap reject it.
+- `--pretty` indents JSON output. It is a read option; write rejects it.
 - `write` compiles a Definition from JSON or CDDL into binary PIL. It does not
   encode event JSON into PIL records. Use the codec library for record encoding.
 - `--root` selects the root rule when compiling CDDL. JSON read output preserves
   the structured schema and can be edited and supplied to write.
-- `bootstrap` writes the built-in pil/value Definition, which describes its own
-  PIL encoding. No external Definition lookup is required to open .rx documents.
 - `-` reads record bytes from stdin or writes binary Definitions to stdout.
 - Byte strings render as arrays of octets; UUIDs use dashed hexadecimal;
   timestamp numbers retain their declared units. Absent fields are omitted;
@@ -762,7 +750,6 @@ rx read pil-example.rx - < pil-example.pil
 rx write purchase.cddl purchase.rx --root purchase
 rx read purchase.rx --pretty > purchase.json
 rx write purchase.json purchase.rx
-rx bootstrap pil.rx
 ```
 
 ## Rust APIs
