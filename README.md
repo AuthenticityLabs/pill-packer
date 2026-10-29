@@ -315,10 +315,11 @@ Install rx from the pill-packer repository root:
 cargo install --path rust --locked --features cli --bin rx
 ```
 
-Download the matching sample Definition and data from https://trietrunk.com/PIL/.
-Save them in one folder, then run:
+Download the JSON schema and matching data from “Try the Worked Example” at
+https://trietrunk.com/PIL/. Save them in one folder, then compile the schema:
 
 ```sh
+rx write pil-example.json pil-example.rx
 rx read pil-example.rx --pretty
 rx read pil-example.rx pil-example.pil
 rx read pil-example.rx pil-example.pac
@@ -749,7 +750,7 @@ rx bootstrap <pil.rx>|-
   explicit null remains null. Definitions and individual frames/PACs are limited to
   64 MiB; a stream can contain multiple records or containers.
 
-Examples (download pil-example.json/.rx/.pil/.pac/.compressed.pac from /PIL/):
+Examples (download the JSON schema and PIL/PAC samples from /PIL/; write creates .rx):
 
 ```sh
 rx write pil-example.json pil-example.rx
