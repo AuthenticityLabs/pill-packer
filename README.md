@@ -301,13 +301,37 @@ Close Go definition handles explicitly. Calls on one handle are serialized;
 independent handles can run concurrently. WASM instances are worker-local.
 Definitions must be supplied before their records can be decoded.
 
-## Current Format Reference
+## PIL Specification
 
-**Project:** Version zero; not a frozen interoperability standard.
+This specification defines PIL Definitions, records, and Packed Array Containers
+(PACs). Byte positions start at zero. “Must” and “reject” state encoding and
+validation requirements. Application storage and delivery bindings are separate.
 
-This section describes the implemented version-zero layout, including named
-headers and optional addressing controls. Applications own storage and delivery
-bindings.
+### Quick Start
+
+Install rx from the pill-packer repository root:
+
+```sh
+cargo install --path rust --locked --features cli --bin rx
+```
+
+Download the matching sample Definition and data from https://trietrunk.com/PIL/.
+Save them in one folder, then run:
+
+```sh
+rx read pil-example.rx --pretty
+rx read pil-example.rx pil-example.pil
+rx read pil-example.rx pil-example.pac
+rx read pil-example.rx pil-example.compressed.pac --pretty
+```
+
+Omitting the data path prints the Definition as JSON. Supplying it prints records
+as JSONL; --pretty indents the output. The record example is explained byte by
+byte in §3; §11 covers compilation and all command forms.
+
+Contents: 1. Definition; 2. Types; 3. Record Layout; 4. Integer Widths;
+5. Lengths and Offsets; 6. Arrays; 7. Objects; 8. PAC Layout;
+9. Validation; 10. Schema Mapping; 11. Command-Line Reference.
 
 PIL exchanges structured state under a shared, immutable Definition. Field
 positions replace names, dictionaries replace repeated strings, and cumulative
@@ -319,7 +343,7 @@ prescribe storage, routing, subscriptions, or query execution.
 
 The wire Definition is PIL, using the built-in `pil/value` bootstrap layout. [definition.cddl](schemas/definition.cddl) describes its
 portable structure and extensible annotations; codec validation additionally
-enforces semantic rules. This JSON illustration uses the same data model:
+enforces semantic rules. This JSON view defines the four-field record used in §3:
 
 ```json
 {
@@ -327,11 +351,10 @@ enforces semantic rules. This JSON illustration uses the same data model:
   "definition": "example/records",
   "version": 0,
   "fields": [
-    { "name": "id", "type": "UUID" },
-    { "name": "revision_id", "type": "U64" },
+    { "name": "id", "type": "U16" },
+    { "name": "count", "type": "U32" },
     { "name": "state", "type": "STRING", "values": ["pending", "authorized", "canceled"] },
-    { "name": "description", "type": "STRING" },
-    { "name": "@fields", "type": "OBJECT" }
+    { "name": "note", "type": "STRING" }
   ]
 }
 ```
@@ -342,8 +365,8 @@ enforces semantic rules. This JSON illustration uses the same data model:
 - `values`, when supplied, is an ordered dictionary of unique strings for a
   scalar `STRING` field. Array position is the zero-based dictionary ID.
 - Optional `adaptive_integers` is `"none"`, `"16"`, or `"32"` (§4).
-- The current codec requires `pil: 0` for fixed integers and `pil: 1` for enabled
-  adaptive integers. These existing layout selectors are distinct from the
+- Use `pil: 0` for fixed integers and `pil: 1` for enabled
+  adaptive integers. These layout selectors are distinct from the
   Definition's `version` and PAC/0. Transport bindings have their own selectors.
 
 Publish Definitions immutably. Changing types, order, fields, dictionary contents,
@@ -387,15 +410,24 @@ the generic UUID primitive does not require version 7.
 There is no bare `TIMESTAMP` type or implicit unit inference. REF16's target and
 scope must be supplied by the binding; PIL reserves no REF16 value and does not
 interpret the target. A dictionary ID instead refers to its own
-field's Definition dictionary and uses the smallest width covering its largest ID:
-CDDL bounded unsigned integers above U16 and no greater than 16,777,215 lower to
-`U24`. Rust, Go, the portable TypeScript reader, and WASM use the same three-byte
-representation. Bounds remain part of validation.
+field's Definition dictionary and uses the smallest width covering its largest ID.
 
 1–256 entries → U8; 257–65,536 → U16; up to 2³² → U32; larger → U64.
 No dictionary ID is an extension sentinel. Out-of-range IDs are invalid.
 
-### 3. Frames and Field States
+CDDL bounded unsigned integers above U16 and no greater than 16,777,215 lower to
+`U24`. Rust, Go, the portable TypeScript reader, and WASM use the same three-byte
+representation. Bounds remain part of validation.
+
+For STRING(n), n is a byte capacity from 1 through 4,294,967,295. The DIRECT
+value is [length][UTF-8 content][zero padding], occupying length_width + n bytes.
+The length prefix is U8 for n ≤ 255, U16 for n ≤ 65,535, otherwise U32. Length
+counts content bytes, excluding padding. Content must fit the capacity and be
+valid UTF-8; padding must be zero. Trailing spaces and embedded NUL bytes are
+content, not padding. STRING(0) is not a type; use STRING for variable text.
+CDDL value constraints and this physical storage capacity are separate (§10).
+
+### 3. Record Layout and Field States
 
 ```text
 [field-state mask]
@@ -442,15 +474,33 @@ no OFFSET fields, it ends after DIRECT values. There is no standalone frame-leng
 prefix. Discovering the boundary requires parsing the masks and offset encodings,
 not decoding the variable payloads. Consecutive frames can share a Definition.
 
-Example, fixed layout `[state STRING(values=[pending,authorized]), note STRING]`:
+Worked example using the Definition in §1 (adaptive integers disabled):
 
-```text
-state = authorized, note = "OK"
-B0 | 01 | 02 00 | 4F 4B
-mask direct  end   UTF-8
+```json
+{"id":42,"count":1500,"state":"authorized","note":"OK"}
 ```
 
-`B0` is `10 11 00 00`: DIRECT, OFFSET, then zero padding. Total: six bytes.
+```text
+Byte position:   0    1–2      3–6          7    8–9     10–11
+Hex bytes:       AB | 2A 00 | DC 05 00 00 | 01 | 02 00 | 4F 4B
+Section:        mask    DIRECT values          ends     variable
+Field:                  id       count   state           note
+```
+
+| Byte position | Interpretation |
+|---|---|
+| 0 | AB = binary 10 10 10 11: id, count, state are DIRECT; note is OFFSET |
+| 1–2 | Little-endian U16 value 42 |
+| 3–6 | Little-endian U32 value 1500 |
+| 7 | Dictionary ID 1 = authorized in the state field's dictionary |
+| 8–9 | End offset 2 relative to the variable section at byte 10 |
+| 10–11 | UTF-8 bytes 4F 4B = OK |
+
+Total: 12 bytes. No field names, Definition identifier, or copy of "authorized"
+appear in this record. Field positions are defined by the ordered fields array;
+byte positions depend on states and encoded widths. With state = null, the mask
+becomes A7 (10 10 01 11), its dictionary byte disappears, and the record is
+11 bytes. Null and absent do not reserve a direct-value slot.
 
 ### 4. Adaptive Integers
 
@@ -528,7 +578,7 @@ CBOR is an external ingestion format only. `CBOR` and `ARRAY<CBOR>` are rejected
 as PIL field types; ingress adapters decode them to native PIL objects before
 storage or runtime processing.
 
-Field names beginning with `@` are reserved. The only implemented reserved field
+Field names beginning with `@` are reserved. The reserved extension field
 is explicitly declared `@fields: OBJECT`; omitting it disallows dynamic root fields.
 When present it must be an OFFSET native PIL map with unique text keys, none beginning
 with `@` or colliding with any defined field. Its entries represent additional
@@ -544,8 +594,7 @@ a new Definition and removal of that key from `@fields` for frames using it.
 
 PAC optionally groups ordered PIL records under one exact Definition. A common
 frame can factor shared values at **arbitrary field positions**; positions need
-not form a contiguous Definition prefix. PAC/0 is implemented in Go, Rust/WASM,
-and the browser binding.
+not form a contiguous Definition prefix. The following tables define the PAC/0 wire layout.
 
 #### Decoded Binary Layout
 
@@ -566,7 +615,7 @@ and the browser binding.
 | header end | variable | Consecutive PIL member frames |
 
 An extension is `[type U32][schema version U16][flags U16][extended length][bytes]`.
-Current extension versions are zero; flag bit 0 means required. Types are singleton.
+Extension schema versions in this specification are zero; flag bit 0 means required. Types are singleton.
 Skip unrecognized optional extensions by length; reject unsupported required ones,
 unsupported versions of recognized types, and duplicates. Type 1 carries a UTF-8
 source name. Other extension identifiers and their interpretation are owned by
@@ -644,23 +693,83 @@ belongs to each container and is decoded by the library. Neither requires a
 particular datastore, time partition, record identity, or subscription protocol.
 Compression does not imply encryption.
 
-### 10. Implementation Boundaries
+### 10. Schema Mapping and Application Bindings
 
-Named application headers, embedded member directories, and fixed-width controls
-are implemented in the current version-zero format. Numeric extensions remain
-available for explicit application contracts. Definition annotations do not gain
-implicit packing behavior merely by being present.
+CDDL is an authoring schema. Compilation produces a PIL Definition containing
+ordered field layouts and a structured `cddl` annotation; .rx contains PIL bytes,
+not embedded CDDL or JSON text. Its named child layouts are resolved from the
+same schema. Schema-bound nested records use BYTES and arrays of child records
+use ARRAY<BYTES>; their contents are child PIL frames with no repeated Definition
+identifier. Arbitrary OBJECT values instead use the bootstrap layout in §7.
 
-CDDL support is a documented subset; unsupported constructs are rejected.
-Neither the generic codec nor a PAC checksum enforces application authorization,
-retention, delivery completeness, or resource roles. Those belong to the consumer.
+The compiler accepts named nonrecursive rules, closed text-keyed records,
+required/optional members, homogeneous arrays with occurrence bounds, choices,
+literals, uint, bool, float64, text, bytes, null, bounded 64-bit integer ranges,
+and supported `.size` constraints. It rejects recursive rules, dynamic maps,
+generics, group rules, tuple arrays, unbounded int/nint, and unsupported controls.
+An accepted schema must agree with its derived root layout. Full encoding and
+decoding validate schema constraints, including nested children. Unsupported
+constructs are errors, not silently relaxed constraints.
 
-### Public Rust APIs
+A schema's `fixed_strings` map binds qualified field paths, such as
+`purchase.customer.name`, to UTF-8 byte capacities. These bindings must cover the
+bounded CDDL text size and select STRING(n) storage (§2). They do not change the
+CDDL constraint. Other annotations have no implicit encoding behavior.
+
+Named PAC headers carry opaque application values; numeric extensions carry
+explicit contracts. The application supplies the meaning of REF16 references,
+resource roles, record identities, and transport negotiation. The codec does not
+provide authorization, retention, delivery completeness, or subscription policy.
+
+### 11. rx Command-Line Reference
+
+```text
+rx read <definition> [<pil/pac>|-] [--pretty]
+rx <definition> [--pretty]
+rx write <definition.json> <definition.rx>
+rx write <schema.cddl> <definition.rx> --root <rule>
+rx bootstrap <pil.rx>|-
+```
+
+- `read` without a data path prints the Definition as JSON. The definition input
+  may be binary .rx or its JSON authoring representation.
+- `read` with a data path prints one JSON object per record (JSONL). It reads PIL
+  streams, PACs, compressed PACs, and gzip-wrapped inputs. Common fields are
+  resolved when rendering PAC members. The PAC digest must match the Definition.
+- `--pretty` indents JSON output. It is a read option; write and bootstrap reject it.
+- `write` compiles a Definition from JSON or CDDL into binary PIL. It does not
+  encode event JSON into PIL records. Use the codec library for record encoding.
+- `--root` selects the root rule when compiling CDDL. JSON read output preserves
+  the structured schema and can be edited and supplied to write.
+- `bootstrap` writes the built-in pil/value Definition, which describes its own
+  PIL encoding. No external Definition lookup is required to open .rx documents.
+- `-` reads record bytes from stdin or writes binary Definitions to stdout.
+- Byte strings render as arrays of octets; UUIDs use dashed hexadecimal;
+  timestamp numbers retain their declared units. Absent fields are omitted;
+  explicit null remains null. Definitions and individual frames/PACs are limited to
+  64 MiB; a stream can contain multiple records or containers.
+
+Examples (download pil-example.json/.rx/.pil/.pac/.compressed.pac from /PIL/):
+
+```sh
+rx write pil-example.json pil-example.rx
+rx read pil-example.rx --pretty
+rx read pil-example.rx pil-example.pil
+rx read pil-example.rx pil-example.pac
+rx read pil-example.rx pil-example.compressed.pac --pretty
+rx read pil-example.rx - < pil-example.pil
+rx write purchase.cddl purchase.rx --root purchase
+rx read purchase.rx --pretty > purchase.json
+rx write purchase.json purchase.rx
+rx bootstrap pil.rx
+```
+
+## Rust APIs
 
 `Definition::new` builds the ordered layout; `DefinitionDocument` retains the full
 annotated source. `encode`/`FrameEncoder` write PIL, `decode`/`decode_exact` read it,
-and `FrameIndex` scans into reusable spans. `ArrayView` and `CborRef` support
-borrowed access. `pac::PacIndex` validates decoded PAC member spans and common
+and `FrameIndex` scans into reusable spans. `ArrayView` supports borrowed array access; native objects use
+`ObjectRef`. CBOR helpers are for external ingress. `pac::PacIndex` validates decoded PAC member spans and common
 fields without materializing objects. `compression::inflate` is feature-gated.
 
 Development schema checks can also validate consumer profiles:
