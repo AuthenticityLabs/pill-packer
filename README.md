@@ -121,10 +121,29 @@ JavaScript helpers are exported as `pill-packer/layout`, `pill-packer/pac`,
 
 ## Command-Line Reader
 
-Build and install the `rx` executable:
+Install RX on macOS, Linux, or Windows through WSL:
 
 ```sh
-cargo install --path rust --locked --features cli --bin rx
+curl -fsSL https://trietrunk.com/install-rx.sh | sh
+```
+
+The [installer](scripts/install-rx.sh) checks system compiler tools, installs Rust
+if needed, downloads the source, and builds with the committed Cargo lockfile.
+It installs into `~/.cargo/bin` by default, respects `CARGO_HOME` and
+`CARGO_INSTALL_ROOT`, and accepts an absolute `RX_INSTALL_ROOT` override. The
+published installer pins the library commit. Build files are removed on exit;
+Cargo's dependency cache is retained. No administrator privileges are requested.
+Re-running installs the published revision again. Open a new terminal for PATH
+changes made by Rust's installer; custom roots need their `bin` added to PATH.
+
+macOS needs Apple Command Line Tools (`xcode-select --install`); Linux/WSL needs
+a C compiler and linker (for example, Debian/Ubuntu's `build-essential`). Native
+Windows shells are not supported by this shell installer; use WSL.
+
+From a local source checkout, installation is also available with
+`cargo install --path rust --locked --features cli --bin rx`.
+
+```sh
 rx read definition.rx records.pil
 rx read definition.rx records.pac
 rx read definition.rx records.pac.gz --pretty
@@ -300,11 +319,16 @@ validation requirements. Application storage and delivery bindings are separate.
 
 ### Quick Start
 
-Install rx from the pill-packer repository root:
+Install RX on macOS, Linux, or Windows through WSL:
 
 ```sh
-cargo install --path rust --locked --features cli --bin rx
+curl -fsSL https://trietrunk.com/install-rx.sh | sh
 ```
+
+The installer builds the published source revision into `~/.cargo/bin` by
+default (or the configured Cargo installation root), installing Rust if needed.
+A system C compiler/linker is required. `RX_INSTALL_ROOT` overrides the root;
+its `bin` directory must be on PATH.
 
 Download the JSON schema and matching data from “Try the Worked Example” at
 https://trietrunk.com/PIL/. Save them in one folder, then compile the schema:
