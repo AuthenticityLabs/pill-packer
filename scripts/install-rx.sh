@@ -1,5 +1,5 @@
 #!/bin/sh
-# RX source installer: macOS, Linux, and Windows through WSL.
+# RX and DOC source installer: macOS, Linux, and Windows through WSL.
 # The website pins RX_DEFAULT_REVISION to the published library commit.
 set -eu
 RX_DEFAULT_REVISION=main
@@ -21,9 +21,9 @@ rx_recent_rust() {
 rx_main() {
     case "${1:-}" in
         --help|-h)
-            printf '%s\n' 'Install RX from source (macOS, Linux, WSL).' \
+            printf '%s\n' 'Install RX and DOC from source (macOS, Linux, WSL).' \
                 'Usage: sh install-rx.sh' \
-                'RX_INSTALL_ROOT overrides the installation root; rx goes in its bin directory.' \
+                'RX_INSTALL_ROOT overrides the installation root; rx and doc go in its bin directory.' \
                 'Default: CARGO_INSTALL_ROOT, CARGO_HOME, or ~/.cargo.' \
                 'RX_REVISION selects a library Git revision (default: published revision).' \
                 'Requires a C compiler and tar. Installs Rust if needed. No sudo is used.'
@@ -70,20 +70,21 @@ rx_main() {
     mkdir "$rx_work/source"
     tar -xzf "$rx_work/source.tar.gz" --strip-components=1 -C "$rx_work/source"
     [ -f "$rx_work/source/rust/Cargo.lock" ] || rx_fail 'The downloaded source has no Rust lockfile.'
-    printf 'Building RX for %s / %s…\n' "$(uname -s)" "$(uname -m)"
+    printf 'Building RX and DOC for %s / %s…\n' "$(uname -s)" "$(uname -m)"
     if [ "$rx_stable" -eq 1 ]; then
         set -- +stable
     else
         set --
     fi
-    cargo "$@" install --path "$rx_work/source/rust" --locked --features cli --bin rx \
+    cargo "$@" install --path "$rx_work/source/rust" --locked --features doc --bin rx --bin doc \
         --root "$rx_root" --target-dir "$rx_work/target" --force
-    [ -x "$rx_root/bin/rx" ] || rx_fail 'The build did not install an executable.'
+    [ -x "$rx_root/bin/rx" ] && [ -x "$rx_root/bin/doc" ] || rx_fail 'The build did not install an executable.'
     "$rx_root/bin/rx" --help >/dev/null
-    printf '\nInstalled RX: %s/bin/rx\n' "$rx_root"
+    "$rx_root/bin/doc" --help >/dev/null
+    printf '\nInstalled RX: %s/bin/rx\nInstalled DOC: %s/bin/doc\n' "$rx_root" "$rx_root"
     case ":$PATH:" in
-        *":$rx_root/bin:"*) printf '%s\n' 'Open a new terminal and run: rx --help' ;;
-        *) printf 'Add %s/bin to your shell PATH, then run: rx --help\n' "$rx_root" ;;
+        *":$rx_root/bin:"*) printf '%s\n' 'Open a new terminal and run: doc --help or rx --help' ;;
+        *) printf 'Add %s/bin to your shell PATH, then run: doc --help or rx --help\n' "$rx_root" ;;
     esac
 }
 rx_main "$@"

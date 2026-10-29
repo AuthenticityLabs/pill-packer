@@ -119,16 +119,16 @@ JavaScript helpers are exported as `pill-packer/layout`, `pill-packer/pac`,
 `pill-packer/gzip`, `pill-packer/columns`, `pill-packer/object`, `pill-packer/pack`, and
 `pill-packer/cbor`. The package root exposes the Rust/WASM reader.
 
-## Command-Line Reader
+## Command-Line Tools
 
-Install RX on macOS, Linux, or Windows through WSL:
+Install RX and DOC on macOS, Linux, or Windows through WSL:
 
 ```sh
 curl -fsSL https://trietrunk.com/install-rx.sh | sh
 ```
 
 The [installer](scripts/install-rx.sh) checks system compiler tools, installs Rust
-if needed, downloads the source, and builds with the committed Cargo lockfile.
+if needed, downloads the source, and builds RX and DOC with the committed Cargo lockfile.
 It installs into `~/.cargo/bin` by default, respects `CARGO_HOME` and
 `CARGO_INSTALL_ROOT`, and accepts an absolute `RX_INSTALL_ROOT` override. The
 published installer pins the library commit. Build files are removed on exit;
@@ -181,7 +181,9 @@ rx write purchase.json purchase.rx
 The CDDL compiler supports named nonrecursive rules, closed text-keyed records,
 required/optional members, homogeneous arrays with occurrence bounds, choices,
 literals, uint, bool, float64, text, bytes, null, bounded 64-bit integer ranges,
-and supported `.size` constraints. It rejects recursive rules, dynamic maps,
+and supported `.size` constraints. Records may include `* tstr => any` to
+preserve additional text-keyed fields in a reserved `@fields: OBJECT` slot;
+declared fields still obey their own types. It rejects recursive rules, other dynamic maps,
 generics, group rules, tuple arrays, unbounded `int`/`nint`, and unsupported
 controls. JSON byte values are octet arrays. The PIL document contains an ordinary
 root Definition plus a `cddl` annotation with the editable schema. Rust, Go, and
@@ -275,6 +277,74 @@ advantage over JSONL was only about 6.2% on this sample. This is a codec experim
 not a production storage or throughput claim. The example also prints a local
 microbenchmark for full nested structural validation and borrowed projection;
 CDDL validation is a separate conformance check, outside that timed path.
+
+## DOC Definition Editor
+
+DOC is a Rust terminal editor. Choose an explicit input mode:
+
+```sh
+doc                         # Start a Definition
+doc --json samples.json     # Propose types from ordinary JSON or JSONL
+doc --cddl purchase.cddl     # Edit CDDL; --root selects a named rule
+doc --rx purchase.rx        # Reopen a compiled Definition
+```
+
+Without a filename, `--json` and `--cddl` open a paste area; `--rx` asks for
+an RX file. F3 opens another input. DOC always saves a binary **`.rx`** file.
+`--output purchase.rx` sets the suggested destination. Existing files require
+confirmation before replacement. Unsaved edits require confirmation before
+opening another input or quitting.
+
+Select a field and press Enter for its semantic type, range or byte length,
+presence, and nullability. Number presets include 0–255, 0–65,535, 0–16,777,215,
+and 0–4,294,967,295; the compiler selects U8, U16, U24, and U32 respectively.
+Custom integer bounds and float64 are also available. Text lengths are UTF-8
+bytes. Object, array, and advanced expressions remain editable as CDDL.
+
+JSON samples suggest types but do not establish a contract. Inferred fields
+start optional; strings and arrays have no inferred length ceiling; integers
+are not narrowed to the sample range. An empty array or null-only sample
+cannot establish its element/value type: review its CDDL before building.
+Missing fields and nulls are separate choices. Additional fields are preserved
+by default using `* tstr => any`, including within inferred nested records.
+Every inferred field needs review. F6 in the CDDL view explicitly accepts the
+whole reviewed source; sample validation still runs before saving.
+
+D edits a string dictionary. Suggested entries come from observed frequencies;
+accepting them does not restrict the field to those strings. Unseen strings
+remain literals. Use explicit CDDL choices for an enumeration. F selects a
+fixed storage capacity for already bounded text; its capacity must cover the
+CDDL byte-length bound. Dictionary and fixed-capacity storage are alternatives.
+
+| Key | Action |
+| --- | --- |
+| F2 | Switch Fields, CDDL, Samples, and Layout views |
+| Enter | Edit the selected field |
+| Tab / Shift+Tab | Move between field controls |
+| Left / Right | Change type, range preset, or toggle |
+| F5 | Apply an editor dialog, or validate samples from the main view |
+| A / Delete | Add or remove a field |
+| D / F | Dictionary / fixed text capacity |
+| O / R | Additional fields policy / root rule |
+| Ctrl+S | Validate and save RX |
+| Ctrl+Q | Quit |
+
+CDDL-backed RX files retain editable CDDL and storage choices. Native layout
+Definitions without CDDL open in a Definition JSON editor; DOC preserves the
+layout rather than guessing validation rules. Untouched application annotations
+retain their native types. Authoring source is an optional `doc_source` annotation
+inside RX; there is no sidecar. All compilation and validation use Pill Packer.
+
+`doc --json samples.json --check` validates without opening a terminal or writing
+output and reports how many inferred decisions still require review. Input is
+limited to 64 MiB and 10,000 sample records. Duplicate keys and integer literals
+outside the supported exact 64-bit range are rejected before inference.
+
+Build only the two tools, without Go or JavaScript tooling:
+
+```sh
+cargo install --locked --path rust --features doc --bin rx --bin doc
+```
 
 ## Build & Test
 
@@ -712,16 +782,19 @@ Compression does not imply encryption.
 ### 10. Schema Mapping and Application Bindings
 
 CDDL is an authoring schema. Compilation produces a PIL Definition containing
-ordered field layouts and a structured `cddl` annotation; .rx contains PIL bytes,
-not embedded CDDL or JSON text. Its named child layouts are resolved from the
+ordered field layouts and a structured `cddl` annotation. RX is a PIL document;
+its schema executes from that structured annotation. DOC may additionally retain
+CDDL editing source in a `doc_source` text annotation. Its named child layouts are resolved from the
 same schema. Schema-bound nested records use BYTES and arrays of child records
 use ARRAY<BYTES>; their contents are child PIL frames with no repeated Definition
 identifier. Arbitrary OBJECT values instead use the native value layout in §7.
 
-The compiler accepts named nonrecursive rules, closed text-keyed records,
+The compiler accepts named nonrecursive rules, text-keyed records,
 required/optional members, homogeneous arrays with occurrence bounds, choices,
 literals, uint, bool, float64, text, bytes, null, bounded 64-bit integer ranges,
-and supported `.size` constraints. It rejects recursive rules, dynamic maps,
+and supported `.size` constraints. Records may include `* tstr => any` to
+preserve additional text-keyed fields in a reserved `@fields: OBJECT` slot;
+declared fields still obey their own types. It rejects recursive rules, other dynamic maps,
 generics, group rules, tuple arrays, unbounded int/nint, and unsupported controls.
 An accepted schema must agree with its derived root layout. Full encoding and
 decoding validate schema constraints, including nested children. Unsupported
@@ -730,7 +803,11 @@ constructs are errors, not silently relaxed constraints.
 A schema's `fixed_strings` map binds qualified field paths, such as
 `purchase.customer.name`, to UTF-8 byte capacities. These bindings must cover the
 bounded CDDL text size and select STRING(n) storage (§2). They do not change the
-CDDL constraint. Other annotations have no implicit encoding behavior.
+CDDL constraint. A `dictionaries` map binds qualified text paths to ordered
+string entries. These select dictionary IDs for known values and literal UTF-8
+for other values; they do not create an enumeration. Dictionary bindings and
+fixed-capacity bindings cannot occupy the same text field. Other annotations
+have no implicit encoding behavior.
 
 Named PAC headers carry opaque application values; numeric extensions carry
 explicit contracts. The application supplies the meaning of REF16 references,

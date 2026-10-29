@@ -50,3 +50,6 @@ pub mod schema;
 
 mod borrowed_object;
 pub use borrowed_object::{ObjectMap, ObjectRef};
+
+#[cfg(feature = "schema")]
+pub mod authoring;

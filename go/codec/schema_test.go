@@ -99,3 +99,41 @@ func TestCBORIsNotAPILFieldType(t *testing.T) {
 		}
 	}
 }
+
+func TestDOCOpenDictionarySharedRuntime(t *testing.T) {
+	read := func(name string) []byte {
+		t.Helper()
+		b, e := os.ReadFile(filepath.Join("..", "..", "rust", "tests", "fixtures", "authoring", name))
+		if e != nil {
+			t.Fatal(e)
+		}
+		return b
+	}
+	l, e := Parse(read("record.rx"), IdentityProfile{Primary: -1})
+	if e != nil {
+		t.Fatal(e)
+	}
+	raw, e := l.EncodeJSON(read("record.json"))
+	if e != nil || !bytes.Equal(raw, read("record.pil")) {
+		t.Fatal("DOC fixture encoding differs", e)
+	}
+	view, e := l.DecodeJSON(raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var got, want any
+	if e = json.Unmarshal(view, &got); e != nil {
+		t.Fatal(e)
+	}
+	if e = json.Unmarshal(read("record.json"), &want); e != nil {
+		t.Fatal(e)
+	}
+	a, _ := json.Marshal(got)
+	b, _ := json.Marshal(want)
+	if !bytes.Equal(a, b) {
+		t.Fatal("additional fields or dictionary values changed")
+	}
+	if _, e = l.EncodeJSON([]byte(`{"state":"unseen","count":256}`)); e == nil {
+		t.Fatal("range validation bypassed")
+	}
+}

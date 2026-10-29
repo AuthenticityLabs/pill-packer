@@ -64,3 +64,16 @@ test('nested CDDL schemas share exact Rust/Go encoding and reject invalid childr
     assert.throws(()=>codec.encodeJSON(id,'{"id":1,"customer":{},"items":[],"kind":"purchase"}'));
   } finally {codec.release(id)}
 });
+
+test('DOC open maps and string dictionaries share native schema encoding',async()=>{
+ const read=name=>new Uint8Array(readFileSync(new URL(`../rust/tests/fixtures/authoring/${name}`,import.meta.url)));
+ const codec=await createCodec(wasm),id=codec.define(read('record.rx'));
+ try{
+  const raw=codec.encodeJSON(id,read('record.json'));
+  assert.deepEqual(raw,read('record.pil'));
+  assert.deepEqual(JSON.parse(codec.decodeJSON(id,raw)),JSON.parse(new TextDecoder().decode(read('record.json'))));
+  const value={state:'unseen',count:99,extra:{nested:['new',false]}};
+  assert.deepEqual(JSON.parse(codec.decodeJSON(id,codec.encodeJSON(id,JSON.stringify(value)))),value);
+  assert.throws(()=>codec.encodeJSON(id,JSON.stringify({...value,count:256})),/schema|range|encode/i);
+ }finally{codec.release(id);}
+});

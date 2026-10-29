@@ -5,7 +5,7 @@ use crate::{Array, Definition, Error, Field, Scalar, Type, Value, decode_exact, 
 use cddl::ast;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -29,6 +29,9 @@ pub enum SchemaType {
         name: String,
     },
     Record {
+        fields: Vec<Member>,
+    },
+    OpenRecord {
         fields: Vec<Member>,
     },
     Array {
@@ -61,6 +64,8 @@ pub struct SchemaDocument {
     /// Qualified field paths, e.g. purchase.customer.name. Units are UTF-8 bytes.
     #[serde(default)]
     pub fixed_strings: BTreeMap<String, u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dictionaries: BTreeMap<String, Vec<String>>,
 }
 fn error(message: impl Into<String>) -> Error {
     Error::Definition(message.into())
@@ -91,6 +96,7 @@ impl SchemaDocument {
             root: root.into(),
             types,
             fixed_strings: BTreeMap::new(),
+            dictionaries: BTreeMap::new(),
         };
         document.compile()?;
         Ok(document)
@@ -147,9 +153,10 @@ impl SchemaDocument {
         if let Some(path) = self
             .fixed_strings
             .keys()
+            .chain(self.dictionaries.keys())
             .find(|p| !used.contains(p.as_str()))
         {
-            return Err(error(format!("unused fixed-string binding {path}")));
+            return Err(error(format!("unused storage binding {path}")));
         }
         Ok(CompiledSchema { plan })
     }
@@ -276,10 +283,25 @@ fn lower_atom(t: &ast::Type2<'_>) -> Result<SchemaType, Error> {
                 return Err(error("map group choices are not yet supported"));
             }
             let mut fields = Vec::new();
+            let mut open = false;
             for (entry, _) in &group.group_choices[0].group_entries {
                 let ast::GroupEntry::ValueMemberKey { ge, .. } = entry else {
                     return Err(error("map group inclusion is not yet supported"));
                 };
+                if let Some(ast::MemberKey::Type1 { t1, .. }) = &ge.member_key {
+                    let key = t1.to_string();
+                    if matches!(key.trim(), "tstr" | "text")
+                        && ge.entry_type.to_string().trim() == "any"
+                        && occurrence(ge.occur.as_ref()) == (0, None)
+                        && !open
+                    {
+                        open = true;
+                        continue;
+                    }
+                    return Err(error(
+                        "only * tstr => any is supported for additional fields",
+                    ));
+                }
                 let name = match &ge.member_key {
                     Some(ast::MemberKey::Bareword { ident, .. }) => ident.ident.to_string(),
                     Some(ast::MemberKey::Value {
@@ -304,7 +326,11 @@ fn lower_atom(t: &ast::Type2<'_>) -> Result<SchemaType, Error> {
                     value: lower_type(&ge.entry_type)?,
                 });
             }
-            SchemaType::Record { fields }
+            if open {
+                SchemaType::OpenRecord { fields }
+            } else {
+                SchemaType::Record { fields }
+            }
         }
         ast::Type2::Array { group, .. } => {
             if group.group_choices.len() != 1 || group.group_choices[0].group_entries.len() != 1 {
@@ -343,7 +369,7 @@ fn lower_atom(t: &ast::Type2<'_>) -> Result<SchemaType, Error> {
 #[derive(Debug, Clone)]
 enum Shape {
     Scalar(Scalar),
-    Record(Vec<(Member, Plan)>),
+    Record(Vec<(Member, Plan)>, bool),
     Array(Box<Plan>),
     Choice(Vec<Plan>),
 }
@@ -352,6 +378,8 @@ struct Plan {
     schema: SchemaType,
     layout: Definition,
     shape: Shape,
+    dictionary: Vec<String>,
+    dictionary_ids: HashMap<String, u64>,
 }
 #[derive(Debug, Clone)]
 pub struct CompiledSchema {
@@ -461,13 +489,17 @@ fn compile_node(
         return result;
     }
     let shape = match t {
-        SchemaType::Record { fields } => {
-            if fields.is_empty() {
+        SchemaType::Record { fields } | SchemaType::OpenRecord { fields } => {
+            let open = matches!(t, SchemaType::OpenRecord { .. });
+            if fields.is_empty() && !open {
                 return Err(error("empty records are not yet supported"));
             }
             let mut names = HashSet::new();
             let mut plans = Vec::new();
             for field in fields {
+                if open && field.name == "@fields" {
+                    return Err(error("@fields is reserved for additional field storage"));
+                }
                 if !names.insert(&field.name) {
                     return Err(error("duplicate record member"));
                 }
@@ -483,7 +515,7 @@ fn compile_node(
                     )?,
                 ));
             }
-            Shape::Record(plans)
+            Shape::Record(plans, open)
         }
         SchemaType::Array { items, min, max } => {
             if max.is_some_and(|max| max < *min) {
@@ -536,25 +568,80 @@ fn compile_node(
             Shape::Scalar(scalar)
         }
     };
+    let dictionary = doc.dictionaries.get(path).cloned().unwrap_or_default();
+    if doc.dictionaries.contains_key(path) {
+        if dictionary.is_empty() || !matches!(shape, Shape::Scalar(Scalar::String)) {
+            return Err(error(
+                "dictionary binding requires variable text and at least one value",
+            ));
+        }
+        if !used.insert(path.to_string()) {
+            return Err(error("ambiguous storage binding path"));
+        }
+    }
     let fields = match &shape {
-        Shape::Record(fields) => fields
-            .iter()
-            .map(|(f, p)| Field::new(&f.name, p.scalar()))
-            .collect(),
+        Shape::Record(fields, open) => {
+            let mut result: Vec<_> = fields.iter().map(|(f, p)| p.field(&f.name)).collect();
+            if *open {
+                result.push(Field::new("@fields", Scalar::Object));
+            }
+            result
+        }
         Shape::Array(_) => vec![Field::new("items", Type::Array(Scalar::Bytes))],
         Shape::Choice(_) => vec![
             Field::new("choice", Scalar::U32),
             Field::new("value", Scalar::Bytes),
         ],
-        Shape::Scalar(kind) => vec![Field::new("value", *kind)],
+        Shape::Scalar(kind) => vec![if dictionary.is_empty() {
+            Field::new("value", *kind)
+        } else {
+            Field::mapped("value", dictionary.clone())
+        }],
     };
     Ok(Plan {
         schema: t.clone(),
         layout: Definition::new(path, 0, fields)?,
         shape,
+        dictionary_ids: dictionary
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i as u64))
+            .collect(),
+        dictionary,
     })
 }
 impl Plan {
+    fn field(&self, name: &str) -> Field {
+        if self.dictionary.is_empty() {
+            Field::new(name, self.scalar())
+        } else {
+            Field::mapped(name, self.dictionary.clone())
+        }
+    }
+    fn value<'a>(
+        &self,
+        kind: Scalar,
+        value: &'a Json,
+        bytes: &'a [u8],
+    ) -> Result<Value<'a>, Error> {
+        if let Some(s) = value.as_str() {
+            if let Some(&i) = self.dictionary_ids.get(s) {
+                return Ok(Value::Mapped(i));
+            }
+        }
+        scalar_value(kind, value, bytes)
+    }
+    fn json(&self, value: Value<'_>) -> Result<Json, Error> {
+        if let Value::Mapped(i) = value {
+            return self
+                .dictionary
+                .get(i as usize)
+                .cloned()
+                .map(Json::String)
+                .ok_or_else(|| error("dictionary ID outside definition"));
+        }
+        scalar_json(value)
+    }
     fn scalar(&self) -> Scalar {
         match self.shape {
             Shape::Scalar(s) => s,
@@ -563,11 +650,12 @@ impl Plan {
     }
     fn validate(&self, value: &Json) -> Result<(), Error> {
         let valid = match (&self.schema, &self.shape) {
-            (_, Shape::Record(fields)) => {
+            (_, Shape::Record(fields, open)) => {
                 let map = value.as_object().ok_or_else(|| error("expected object"))?;
-                if map
-                    .keys()
-                    .any(|k| !fields.iter().any(|(f, _)| f.name == *k))
+                if !open
+                    && map
+                        .keys()
+                        .any(|k| !fields.iter().any(|(f, _)| f.name == *k))
                 {
                     return Err(error("unknown record member"));
                 }
@@ -639,9 +727,9 @@ impl Plan {
                 } else {
                     Vec::new()
                 };
-                encode(&self.layout, &[scalar_value(*kind, value, &b)?])
+                encode(&self.layout, &[self.value(*kind, value, &b)?])
             }
-            Shape::Record(fields) => {
+            Shape::Record(fields, open) => {
                 let map = value.as_object().ok_or_else(|| error("expected object"))?;
                 let mut storage = Vec::with_capacity(fields.len());
                 for (f, p) in fields {
@@ -655,14 +743,38 @@ impl Plan {
                         _ => Vec::new(),
                     });
                 }
-                let mut values = Vec::with_capacity(fields.len());
+                let additional = if *open {
+                    let extras: serde_json::Map<_, _> = map
+                        .iter()
+                        .filter(|(k, _)| !fields.iter().any(|(f, _)| &f.name == *k))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    if extras.is_empty() {
+                        Vec::new()
+                    } else {
+                        crate::object::encode_value(
+                            &ciborium::Value::serialized(&Json::Object(extras))
+                                .map_err(|e| error(e.to_string()))?,
+                        )?
+                    }
+                } else {
+                    Vec::new()
+                };
+                let mut values = Vec::with_capacity(fields.len() + usize::from(*open));
                 for (i, (f, p)) in fields.iter().enumerate() {
                     values.push(match map.get(&f.name) {
                         None => Value::Absent,
                         Some(v) => match p.shape {
-                            Shape::Scalar(k) => scalar_value(k, v, &storage[i])?,
+                            Shape::Scalar(k) => p.value(k, v, &storage[i])?,
                             _ => Value::Bytes(&storage[i]),
                         },
+                    });
+                }
+                if *open {
+                    values.push(if additional.is_empty() {
+                        Value::Absent
+                    } else {
+                        Value::Object(&additional)
                     });
                 }
                 encode(&self.layout, &values)
@@ -691,15 +803,15 @@ impl Plan {
         let frame = decode_exact(&self.layout, bytes)?;
         let values = frame.values();
         match &self.shape {
-            Shape::Scalar(_) => scalar_json(values[0]),
-            Shape::Record(fields) => {
+            Shape::Scalar(_) => self.json(values[0]),
+            Shape::Record(fields, open) => {
                 let mut map = serde_json::Map::new();
                 for (i, (f, p)) in fields.iter().enumerate() {
                     if values[i] == Value::Absent {
                         continue;
                     }
                     let value = if matches!(p.shape, Shape::Scalar(_)) {
-                        scalar_json(values[i])?
+                        p.json(values[i])?
                     } else {
                         let Value::Bytes(b) = values[i] else {
                             return Err(error("invalid nested record payload"));
@@ -707,6 +819,23 @@ impl Plan {
                         p.decode(b)?
                     };
                     map.insert(f.name.clone(), value);
+                }
+                if *open && values[fields.len()] != Value::Absent {
+                    let Value::Object(raw) = values[fields.len()] else {
+                        return Err(error("invalid additional fields"));
+                    };
+                    let extra: Json = crate::object::decode_value(raw)?
+                        .deserialized()
+                        .map_err(|e| error(e.to_string()))?;
+                    let extra = extra
+                        .as_object()
+                        .ok_or_else(|| error("additional fields must be an object"))?;
+                    for (key, value) in extra {
+                        if fields.iter().any(|(f, _)| &f.name == key) {
+                            return Err(error("additional fields override a declared field"));
+                        }
+                        map.insert(key.clone(), value.clone());
+                    }
                 }
                 Ok(Json::Object(map))
             }
@@ -783,7 +912,12 @@ fn scalar_value<'a>(kind: Scalar, value: &'a Json, bytes: &'a [u8]) -> Result<Va
         Scalar::Bool => Value::Bool(value.as_bool().ok_or_else(|| error("expected bool"))?),
         Scalar::U8 => Value::U8(u8::try_from(n).map_err(|_| Error::Overflow)?),
         Scalar::U16 => Value::U16(u16::try_from(n).map_err(|_| Error::Overflow)?),
-        Scalar::U24 => Value::U24(u32::try_from(n).ok().filter(|n| *n <= 0xffffff).ok_or(Error::Overflow)?),
+        Scalar::U24 => Value::U24(
+            u32::try_from(n)
+                .ok()
+                .filter(|n| *n <= 0xffffff)
+                .ok_or(Error::Overflow)?,
+        ),
         Scalar::U32 => Value::U32(u32::try_from(n).map_err(|_| Error::Overflow)?),
         Scalar::U64 => Value::U64(u64::try_from(n).map_err(|_| Error::Overflow)?),
         Scalar::I8 => Value::I8(i8::try_from(n).map_err(|_| Error::Overflow)?),

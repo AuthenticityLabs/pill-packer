@@ -24,9 +24,11 @@ elif name=='tar':
 elif name=='cargo':
  if mode=='build-fail':sys.exit(1)
  assert '--locked' in args and args[args.index('--bin')+1]=='rx'
- assert args[args.index('--features')+1]=='cli'
+ assert args[args.index('--features')+1]=='doc'
+ assert [args[i+1] for i,x in enumerate(args[:-1]) if x=='--bin']==['rx','doc']
  root=pathlib.Path(args[args.index('--root')+1]);(root/'bin').mkdir(parents=True,exist_ok=True)
- exe=root/'bin/rx';exe.write_text('#!/bin/sh\nexit 0\n');exe.chmod(0o755)
+ for tool in ['rx','doc']:
+  exe=root/'bin'/tool;exe.write_text('#!/bin/sh\nexit 0\n');exe.chmod(0o755)
 '''
 class InstallerTests(unittest.TestCase):
  def run_installer(self, mode='', system='Linux', wget=False):
@@ -41,7 +43,7 @@ class InstallerTests(unittest.TestCase):
    run=subprocess.run(['/bin/sh',str(INSTALLER)],env=env,capture_output=True,text=True)
    calls=[json.loads(s) for s in log.read_text().splitlines()]
    self.assertEqual(list(temps.iterdir()),[], 'Temporary build files must be cleaned')
-   return run,calls,(root/'installed/bin/rx').exists()
+   return run,calls,all((root/'installed/bin'/tool).exists() for tool in ['rx','doc'])
  def test_linux_and_macos(self):
   for system in ['Linux','Darwin']:
    with self.subTest(system=system):
