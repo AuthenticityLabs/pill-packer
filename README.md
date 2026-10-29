@@ -814,7 +814,7 @@ explicit contracts. The application supplies the meaning of REF16 references,
 resource roles, record identities, and transport negotiation. The codec does not
 provide authorization, retention, delivery completeness, or subscription policy.
 
-### 11. rx Command-Line Reference
+### 11. Command-Line Reference
 
 ```text
 rx read <definition> [<pil/pac>|-] [--pretty]
@@ -852,6 +852,22 @@ rx write purchase.cddl purchase.rx --root purchase
 rx read purchase.rx --pretty > purchase.json
 rx write purchase.json purchase.rx
 ```
+
+
+DOC authors Definitions interactively and always saves `.rx`:
+
+```text
+doc
+doc --json [samples.json|samples.jsonl]
+doc --cddl [schema.cddl] [--root rule]
+doc --rx [definition.rx]
+```
+
+`--output file.rx` chooses a destination; replacement requires confirmation.
+`--check` validates a supplied file without opening the editor or writing output.
+JSON samples suggest unconstrained types and optional fields; reviewed choices
+become the schema. CDDL-backed RX files retain the schema and storage annotations.
+Native Definitions without CDDL use the Definition JSON editor.
 
 ## Rust APIs
 
